@@ -25,7 +25,7 @@ class matrix_data:
         sampled_rows = random.choice(
             key, jnp.arange(num_rows), shape=(num_samples,), replace=True
         )
-        sampled_values = self.matrix[sampled_rows[:, None], :]
+        sampled_values = self.matrix[sampled_rows]
         return sampled_rows, sampled_values
 
 
