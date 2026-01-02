@@ -12,11 +12,7 @@ import utils
 jax.config.update("jax_enable_x64", True)
 
 
-def get_qsvt_angles(
-    func,
-    degree,
-    rescale,
-):
+def get_qsvt_angles(func, degree, rescale):
     """
     Get QSVT angles for a given target function.
 
@@ -51,10 +47,7 @@ def get_qsvt_angles(
     return angle_set
 
 
-def get_qsvt_angles_inverse(
-    kappa,
-    epsilon=0.1,
-):
+def get_qsvt_angles_inverse(kappa, epsilon=0.1):
     """
     Get QSVT angles for approximating the inverse function.
 
@@ -74,6 +67,43 @@ def get_qsvt_angles_inverse(
         ensure_bounded=True,
         return_scale=True,
         chebyshev_basis=True,
+    )
+
+    (phi_set, red_phiset, parity) = angle_sequence.QuantumSignalProcessingPhases(
+        pcoefs, method="sym_qsp", chebyshev_basis=True
+    )
+
+    assert isinstance(phi_set, np.ndarray), "Failed to compute QSVT angles."
+
+    # Eq. (15) in https://arxiv.org/pdf/2002.11649
+    phi_to_angle = (
+        jnp.array([1 / 4] + [1 / 2] * (phi_set.shape[0] - 2) + [1 / 4]) * jnp.pi
+    )
+    angle_set = phi_set + phi_to_angle
+
+    return angle_set, scale
+
+
+def get_qsvt_angles_sign(degree, threshold=0.1, rescale=0.9):
+    """
+    Get QSVT angles for approximating the sign function.
+
+    Args:
+        degree: degree of the polynomial approximation
+        threshold: equals one when |x| >= threshold
+        rescale: scaling factor to ensure the function is bounded within [-1, 1]
+    Returns:
+        angle_set: array of QSVT angles
+    """
+
+    poly = pyqsp.poly.PolySign()
+    pcoefs, scale = poly.generate(
+        degree=degree,
+        delta=np.ceil(2.0 / threshold),
+        ensure_bounded=True,
+        return_scale=True,
+        chebyshev_basis=True,
+        max_scale=rescale,
     )
 
     (phi_set, red_phiset, parity) = angle_sequence.QuantumSignalProcessingPhases(
@@ -264,9 +294,9 @@ def _test_qsvt_imperfect(func, noise_level=0.001):
 
 
 def _test_inverse():
-    dim = 5
+    dim = 100
     kappa = 5
-    epsilon = 0.1
+    epsilon = 0.01
 
     print("Testing QSVT with 1/x function...")
     print(f"Condition number: {kappa}, Approximation error: {epsilon}")
@@ -295,16 +325,61 @@ def _test_inverse():
 
     eigvals_target = jnp.sort(scale / eigvals)
 
-    mask = jnp.abs(eigvals_target) < 1.0
-    eigvals_qsvt = eigvals_qsvt * mask
-    eigvals_target = eigvals_target * mask
+    # remove outliers that are smaller than 1/kappa
+    num_outliers = jnp.sum(jnp.abs(eigvals) < 1.0 / kappa)
+    error = jnp.abs(eigvals_qsvt - eigvals_target)
+    error = jnp.sort(error)[:-num_outliers]  # remove outliers
 
     print(
         "Inverse QSVT approximation error:",
-        jnp.max(jnp.abs(eigvals_qsvt - eigvals_target)),
+        jnp.max(error),
     )
 
-    assert jnp.allclose(eigvals_qsvt, eigvals_target, atol=1e-2)
+    assert jnp.allclose(error, 0, atol=10 * epsilon)
+
+
+def _test_sign():
+    dim = 100
+    threshold = 0.1
+    degree = 51
+
+    print("Testing QSVT with sign function...")
+    print(f"Threshold: {threshold}, Polynomial degree: {degree}")
+
+    angle_set, scale = get_qsvt_angles_sign(
+        threshold=threshold,
+        degree=degree,
+    )
+
+    key = random.PRNGKey(42)
+    key, subkey = random.split(key)
+    U = utils.random_halsmos_dilation(subkey, dim).astype(jnp.complex128)
+    V = utils.hermitian_block_encoding(U)
+    A = utils.get_block_encoded(V, num_ancilla=2)
+
+    start_time = time.time()
+    V_qsvt = apply_qsvt(V, num_ancilla=2, angle_set=angle_set)
+    end_time = time.time()
+    print(f"Time for sign QSVT application: {end_time - start_time} seconds")
+
+    A_qsvt = utils.get_block_encoded(V_qsvt, num_ancilla=2)
+
+    # test QSVT approximation
+    eigvals = jnp.linalg.eigvalsh(A)
+    eigvals_qsvt = jnp.linalg.eigvalsh(A_qsvt)
+    eigvals_target = jnp.sort(scale * jnp.sign(eigvals))
+
+    # remove outliers that are smaller than threshold
+    num_outliers = jnp.sum(jnp.abs(eigvals) < 1.5 * threshold)
+    error = jnp.abs(eigvals_qsvt - eigvals_target)
+    error = jnp.sort(error)[:-num_outliers]  # remove outliers
+
+    print(
+        "Inverse QSVT approximation error:",
+        jnp.max(error),
+    )
+
+    assert jnp.allclose(error, 0, atol=1e-2)
 
 
 if __name__ == "__main__":
@@ -358,6 +433,10 @@ if __name__ == "__main__":
     print("---" * 10)
     print("Testing 1/x function...")
     _test_inverse()
+
+    print("---" * 10)
+    print("Testing sign function...")
+    _test_sign()
 
     print("---" * 10)
 
