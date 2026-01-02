@@ -1,8 +1,6 @@
 import jax.numpy as jnp
 from jax import random
 
-jax.config.update("jax_enable_x64", True)
-
 from data_generation import matrix_data, vector_data
 
 
