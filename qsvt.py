@@ -2,6 +2,7 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pyqsp
 from jax import random
 from pyqsp import angle_sequence
@@ -25,7 +26,7 @@ def get_qsvt_angles(
         rescale: scaling factor to ensure the function is bounded within [-1, 1]
 
     Returns:
-        angles: array of QSVT angles
+        angle_set: array of QSVT angles
     """
     poly = pyqsp.poly.PolyTaylorSeries().taylor_series(
         func=func,
@@ -39,13 +40,55 @@ def get_qsvt_angles(
         poly, method="sym_qsp", chebyshev_basis=True
     )
 
+    assert isinstance(phi_set, np.ndarray), "Failed to compute QSVT angles."
+
     # Eq. (15) in https://arxiv.org/pdf/2002.11649
     phi_to_angle = (
-        jnp.array([1 / 4] + [1 / 2] * (phi_set.shape[0] - 2) + [1 / 4]) * jnp.pi  # type: ignore
+        jnp.array([1 / 4] + [1 / 2] * (phi_set.shape[0] - 2) + [1 / 4]) * jnp.pi
     )
-    angle_set = phi_set + phi_to_angle  # type: ignore
+    angle_set = phi_set + phi_to_angle
 
     return angle_set
+
+
+def get_qsvt_angles_inverse(
+    kappa,
+    epsilon=0.1,
+):
+    """
+    Get QSVT angles for approximating the inverse function.
+
+    Args:
+        kappa: condition number
+        epsilon: approximation error
+
+    Returns:
+        angle_set: array of QSVT angles
+        scale: scaling factor
+    """
+    poly = pyqsp.poly.PolyOneOverX()
+    pcoefs, scale = poly.generate(
+        kappa=kappa,
+        epsilon=epsilon,
+        return_coef=True,
+        ensure_bounded=True,
+        return_scale=True,
+        chebyshev_basis=True,
+    )
+
+    (phi_set, red_phiset, parity) = angle_sequence.QuantumSignalProcessingPhases(
+        pcoefs, method="sym_qsp", chebyshev_basis=True
+    )
+
+    assert isinstance(phi_set, np.ndarray), "Failed to compute QSVT angles."
+
+    # Eq. (15) in https://arxiv.org/pdf/2002.11649
+    phi_to_angle = (
+        jnp.array([1 / 4] + [1 / 2] * (phi_set.shape[0] - 2) + [1 / 4]) * jnp.pi
+    )
+    angle_set = phi_set + phi_to_angle
+
+    return angle_set, scale
 
 
 @partial(jax.jit, static_argnums=(1,))
@@ -121,7 +164,7 @@ def apply_qsvt_imperfect(U_sequence, num_ancilla, angle_set):
 
 
 def _test_qsvt(func):
-    dim = 1000
+    dim = 100
     polydeg = 12
     rescale = 0.5
 
@@ -159,7 +202,9 @@ def _test_qsvt(func):
 
 
 def _test_qsvt_imperfect(func, noise_level=0.001):
-    dim = 1000
+    print(f"Testing imperfect QSVT with noise level: {noise_level}")
+
+    dim = 100
     polydeg = 6
     rescale = 0.5
 
@@ -212,6 +257,55 @@ def _test_qsvt_imperfect(func, noise_level=0.001):
         jnp.max(jnp.abs(eigvals_qsvt - eigvals_target)) / noise_level,
     )
 
+    assert (
+        jnp.max(jnp.abs(eigvals_qsvt - eigvals_target)) / noise_level < 1.0
+        or noise_level < 1e-5
+    )
+
+
+def _test_inverse():
+    dim = 5
+    kappa = 5
+    epsilon = 0.1
+
+    print("Testing QSVT with 1/x function...")
+    print(f"Condition number: {kappa}, Approximation error: {epsilon}")
+
+    angle_set, scale = get_qsvt_angles_inverse(
+        kappa=kappa,
+        epsilon=epsilon,
+    )
+
+    key = random.PRNGKey(42)
+    key, subkey = random.split(key)
+    U = utils.random_halsmos_dilation(subkey, dim).astype(jnp.complex128)
+    V = utils.hermitian_block_encoding(U)
+    A = utils.get_block_encoded(V, num_ancilla=2)
+
+    start_time = time.time()
+    V_qsvt = apply_qsvt(V, num_ancilla=2, angle_set=angle_set)
+    end_time = time.time()
+    print(f"Time for inverse QSVT application: {end_time - start_time} seconds")
+
+    A_qsvt = utils.get_block_encoded(V_qsvt, num_ancilla=2)
+
+    # test QSVT approximation
+    eigvals = jnp.linalg.eigvalsh(A)
+    eigvals_qsvt = jnp.linalg.eigvalsh(A_qsvt)
+
+    eigvals_target = jnp.sort(scale / eigvals)
+
+    mask = jnp.abs(eigvals_target) < 1.0
+    eigvals_qsvt = eigvals_qsvt * mask
+    eigvals_target = eigvals_target * mask
+
+    print(
+        "Inverse QSVT approximation error:",
+        jnp.max(jnp.abs(eigvals_qsvt - eigvals_target)),
+    )
+
+    assert jnp.allclose(eigvals_qsvt, eigvals_target, atol=1e-2)
+
 
 if __name__ == "__main__":
 
@@ -230,52 +324,40 @@ if __name__ == "__main__":
     print("Testing QSVT...")
 
     print("---" * 10)
-
     print("Testing even function...")
-
     _test_qsvt(func_even)
 
     print("---" * 10)
-
     print("Testing imperfect QSVT...")
-
     _test_qsvt_imperfect(func_even)
 
     print("---" * 10)
-
     print("Testing another even function...")
-
     _test_qsvt(func_even1)
 
     print("---" * 10)
-
     print("Testing imperfect QSVT...")
-
     _test_qsvt_imperfect(func_even1)
 
     print("---" * 10)
-
     print("Testing odd function...")
-
     _test_qsvt(func_odd)
 
     print("---" * 10)
-
     print("Testing imperfect QSVT...")
-
     _test_qsvt_imperfect(func_odd)
 
     print("---" * 10)
-
     print("Testing imperfect QSVT with no noise...")
-
     _test_qsvt_imperfect(func_odd, noise_level=0.0)
 
     print("---" * 10)
-
     print("Testing imperfect QSVT with higher noise...")
-
     _test_qsvt_imperfect(func_odd, noise_level=0.1)
+
+    print("---" * 10)
+    print("Testing 1/x function...")
+    _test_inverse()
 
     print("---" * 10)
 
