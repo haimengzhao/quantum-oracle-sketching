@@ -1,3 +1,5 @@
+from functools import partial
+
 import jax
 import jax.numpy as jnp
 import pyqsp
@@ -46,6 +48,7 @@ def get_qsvt_angles(
     return angle_set
 
 
+@partial(jax.jit, static_argnums=(1,))
 def apply_qsvt(U, num_ancilla, angle_set):
     """
     Apply QSVT to a Hermitian unitary U that block encodes some matrix using the given angles.
@@ -61,9 +64,6 @@ def apply_qsvt(U, num_ancilla, angle_set):
 
     # dimension of the block encoded matrix
     dim = U.shape[-1] // (2**num_ancilla)
-
-    # test Hermitian
-    assert jnp.allclose(U, U.conj().T), "U is not Hermitian"
 
     # diagonal phase signs of the QSP operator, angle not multiplied yet
     mask = jnp.concatenate([jnp.array([1.0]), -jnp.ones((2**num_ancilla) - 1)])
@@ -81,13 +81,8 @@ def apply_qsvt(U, num_ancilla, angle_set):
     return circ
 
 
-# tests
-if __name__ == "__main__":
-
-    def func(x):
-        return 2 * x**2 - 1
-
-    dim = 100
+def _test(func):
+    dim = 1000
     polydeg = 12
     rescale = 0.5
 
@@ -108,7 +103,11 @@ if __name__ == "__main__":
     V = utils.hermitian_block_encoding(U)
     A = utils.get_block_encoded(V, num_ancilla=2)
 
+    start_time = time.time()
     V_qsvt = apply_qsvt(V, num_ancilla=2, angle_set=angle_set)
+    end_time = time.time()
+    print(f"Time for QSVT application: {end_time - start_time} seconds")
+
     A_qsvt = utils.get_block_encoded(V_qsvt, num_ancilla=2)
 
     # test QSVT approximation
@@ -122,3 +121,24 @@ if __name__ == "__main__":
     assert jnp.allclose(eigvals_qsvt, eigvals_target, atol=1e-4)
 
     print("All tests passed.")
+
+
+if __name__ == "__main__":
+
+    def func_even(x):
+        return 2 * x**2 - 1
+
+    def func_even1(x):
+        return x**2
+
+    def func_odd(x):
+        return 4 * x**3 - 3 * x
+
+    # time profiling
+    import time
+
+    _test(func_even)
+
+    _test(func_even1)
+
+    _test(func_odd)
