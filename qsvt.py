@@ -6,6 +6,8 @@ from pyqsp import angle_sequence
 
 import utils
 
+jax.config.update("jax_enable_x64", True)
+
 
 def get_qsvt_angles(
     func,
@@ -44,15 +46,6 @@ def get_qsvt_angles(
     return angle_set
 
 
-def qsp_op(angle, dim, num_ancilla=2):
-    """QSP operator for a given rotation angle. dim is the dimension of the block encoded matrix."""
-    mask = jnp.array([1] + [-1] * (2**num_ancilla - 1))
-    angle = jnp.ones(2**num_ancilla) * angle
-    angle = angle * mask
-    op = jnp.diag(jnp.exp(1j * angle))
-    return jnp.kron(op, jnp.eye(dim))
-
-
 def apply_qsvt(U, num_ancilla, angle_set):
     """
     Apply QSVT to a Hermitian unitary U that block encodes some matrix using the given angles.
@@ -72,12 +65,18 @@ def apply_qsvt(U, num_ancilla, angle_set):
     # test Hermitian
     assert jnp.allclose(U, U.conj().T), "U is not Hermitian"
 
-    circ = jnp.exp(1j * (-jnp.pi / 2) * (angle_set.shape[0])) * qsp_op(
-        angle_set[0], dim, num_ancilla=num_ancilla
+    # diagonal phase signs of the QSP operator, angle not multiplied yet
+    mask = jnp.concatenate([jnp.array([1.0]), -jnp.ones((2**num_ancilla) - 1)])
+    qsp_op_phase_pattern = jnp.repeat(mask, dim)
+
+    circ = jnp.exp(1j * (-jnp.pi / 2) * (angle_set.shape[0])) * jnp.diag(
+        jnp.exp(1j * angle_set[0] * qsp_op_phase_pattern)
     )
 
+    # apply QSP rotations and unitaries
+    # using diagonal element-wise multiplication for efficiency
     for angle in angle_set[1:]:
-        circ = circ @ V @ qsp_op(angle, dim, num_ancilla=num_ancilla)
+        circ = circ @ U * jnp.exp(1j * angle * qsp_op_phase_pattern)[None, :]
 
     return circ
 
@@ -105,7 +104,7 @@ if __name__ == "__main__":
 
     key = random.PRNGKey(0)
     key, subkey = random.split(key)
-    U = utils.random_halsmos_dilation(subkey, dim)
+    U = utils.random_halsmos_dilation(subkey, dim).astype(jnp.complex128)
     V = utils.hermitian_block_encoding(U)
     A = utils.get_block_encoded(V, num_ancilla=2)
 
@@ -120,6 +119,6 @@ if __name__ == "__main__":
 
     print("QSVT approximation error:", jnp.max(jnp.abs(eigvals_qsvt - eigvals_target)))
 
-    assert jnp.allclose(eigvals_qsvt, eigvals_target, atol=1e-1)
+    assert jnp.allclose(eigvals_qsvt, eigvals_target, atol=1e-4)
 
     print("All tests passed.")
