@@ -342,13 +342,15 @@ def _test_sign():
     dim = 100
     threshold = 0.1
     degree = 51
+    scale = 0.9
 
     print("Testing QSVT with sign function...")
     print(f"Threshold: {threshold}, Polynomial degree: {degree}")
 
-    angle_set, scale = get_qsvt_angles_sign(
+    angle_set, _ = get_qsvt_angles_sign(
         threshold=threshold,
         degree=degree,
+        rescale=scale,
     )
 
     key = random.PRNGKey(42)
@@ -375,7 +377,7 @@ def _test_sign():
     error = jnp.sort(error)[:-num_outliers]  # remove outliers
 
     print(
-        "Inverse QSVT approximation error:",
+        "Sign QSVT approximation error:",
         jnp.max(error),
     )
 
