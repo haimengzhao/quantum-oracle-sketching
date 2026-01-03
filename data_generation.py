@@ -41,3 +41,17 @@ class vector_data:
         )
         sampled_values = self.vector[sampled_indices]
         return sampled_indices, sampled_values
+
+
+class boolean_data:
+    def __init__(self, truth_table):
+        self.truth_table = truth_table
+        self.length = truth_table.shape[0]
+
+    def get_data(self, key, num_samples):
+        # uniform random queries
+        sampled_indices = random.choice(
+            key, jnp.arange(self.length), shape=(num_samples,), replace=True
+        )
+        sampled_values = self.truth_table[sampled_indices]
+        return sampled_indices, sampled_values
