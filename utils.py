@@ -25,7 +25,7 @@ def generate_random_hermitian(key, dim):
     """Generate a random Hermitian matrix of size n x n with norm bounded by one."""
     A = random.normal(key, (dim, dim)) + 1j * random.normal(key, (dim, dim))
     A = (A + A.conj().T) / 2
-    # Normalize the matrix to have norm bounded by one
+    # Normalize the matrix to have norm bounded by 1
     norm = jnp.linalg.norm(A, ord=2)
     A = A / norm
     return A
@@ -67,7 +67,11 @@ def hermitian_block_encoding(U):
     return V
 
 
-# tests
+"""
+Tests
+"""
+
+
 if __name__ == "__main__":
     dim = 4
     key = random.PRNGKey(0)

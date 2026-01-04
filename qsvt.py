@@ -193,19 +193,26 @@ def apply_qsvt_imperfect(U_sequence, num_ancilla, angle_set):
     return circ
 
 
+"""
+Tests
+"""
+
+
 def _test_qsvt(func):
     dim = 100
-    polydeg = 12
-    rescale = 0.5
+    polydeg = 10
+    rescale = 0.9
 
     def scaled_func(x):
         return rescale * func(x)
 
     angle_set = get_qsvt_angles(
-        func=scaled_func,
+        func=func,
         degree=polydeg,
         rescale=rescale,
     )
+
+    print("QSVT angle set length:", angle_set.shape[0])
 
     key = random.PRNGKey(0)
     key, subkey = random.split(key)
@@ -235,14 +242,14 @@ def _test_qsvt_imperfect(func, noise_level=0.001):
     print(f"Testing imperfect QSVT with noise level: {noise_level}")
 
     dim = 100
-    polydeg = 6
+    polydeg = 10
     rescale = 0.5
 
     def scaled_func(x):
         return rescale * func(x)
 
     angle_set = get_qsvt_angles(
-        func=scaled_func,
+        func=func,
         degree=polydeg,
         rescale=rescale,
     )
@@ -393,7 +400,7 @@ if __name__ == "__main__":
         return x**2
 
     def func_odd(x):
-        return 4 * x**3 - 3 * x
+        return np.arcsin(x * np.sin(1.0))
 
     # time profiling
     import time
@@ -441,5 +448,4 @@ if __name__ == "__main__":
     _test_sign()
 
     print("---" * 10)
-
     print("All tests passed.")

@@ -19,7 +19,7 @@ class matrix_data:
         sampled_values = self.matrix[sampled_rows, sampled_cols]
         return sampled_rows, sampled_cols, sampled_values
 
-    def get_random_row_data(self, key, num_samples):
+    def get_row_data(self, key, num_samples):
         # uniform random samples of rows
         num_rows = self.shape[0]
         sampled_rows = random.choice(
