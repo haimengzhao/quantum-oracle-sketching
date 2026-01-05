@@ -164,7 +164,7 @@ def _test_q_state_sketch_flat(key):
     # random \pm 1 vector
     N = 1000
 
-    print("Testing vector with dimension N =", N)
+    print(f"Testing vector with dimension N = {N:.2e}")
 
     x = random.randint(key, (N,), minval=0, maxval=2) * 2 - 1
 
@@ -177,14 +177,13 @@ def _test_q_state_sketch_flat(key):
     state = q_state_sketch_flat(data, N)
 
     # test norm
-    print("State norm squared:", jnp.linalg.norm(state) ** 2)
+    print(f"State norm squared: 1 + {jnp.linalg.norm(state) ** 2 - 1:.3e}")
     assert jnp.isclose(jnp.linalg.norm(state) ** 2, 1.0, atol=1e-2)
 
     # test reconstruction
     recon_x = state
     print(
-        "State reconstruction error in trace distance:",
-        jnp.sqrt(1 - jnp.abs(jnp.vdot(recon_x, x / jnp.sqrt(N))) ** 2),
+        f"State reconstruction error in trace distance: {jnp.sqrt(1 - jnp.abs(jnp.vdot(recon_x, x / jnp.sqrt(N))) ** 2):.3e}"
     )
     assert jnp.allclose(
         jnp.sqrt(1 - jnp.abs(jnp.vdot(recon_x, x / jnp.sqrt(N))) ** 2), 0, atol=1e-1
@@ -195,7 +194,7 @@ def _test_q_oracle_sketch_boolean(key):
     # random boolean function
     N = 1000
 
-    print("Testing boolean function with dimension N =", N)
+    print(f"Testing boolean function with dimension N = {N:.2e}")
 
     f = random.randint(key, (N,), minval=0, maxval=2)
 
@@ -208,12 +207,12 @@ def _test_q_oracle_sketch_boolean(key):
     diag = q_oracle_sketch_boolean(data, N)
 
     # test unitarity
-    print("Oracle unitarity check:", jnp.allclose(jnp.abs(diag), 1.0))
+    print(f"Oracle unitarity check: {jnp.allclose(jnp.abs(diag), 1.0)}")
     assert jnp.allclose(jnp.abs(diag), 1.0)
 
     # test reconstruction
     recon_f = (1 - jnp.real(diag)) / 2
-    print("Boolean function reconstruction error:", jnp.max(jnp.abs(recon_f - f)))
+    print(f"Boolean function reconstruction error: {jnp.max(jnp.abs(recon_f - f)):.3e}")
     assert jnp.allclose(jnp.max(jnp.abs(recon_f - f)), 0, atol=1e-1)
 
 
@@ -241,7 +240,7 @@ def _test_q_oracle_sketch_matrix_element(key):
 
     end_time = time.time()
 
-    print("Oracle construction time:", end_time - start_time)
+    print(f"Oracle construction time: {end_time - start_time:.3e} seconds")
 
     if N <= 10:
         # only reconstruct the full dense matrix when N is small
@@ -273,7 +272,7 @@ def _test_q_oracle_sketch_matrix_element(key):
     A_reconst = oracle_diag[0, 0]
 
     error = jnp.max(jnp.abs(A_reconst - A.reshape(N**2)))
-    print("Matrix reconstruction error in operator norm:", error)
+    print(f"Matrix reconstruction error in operator norm: {error:.3e}")
 
     assert jnp.isclose(error, 0, atol=1e-1)
 

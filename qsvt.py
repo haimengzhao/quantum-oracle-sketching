@@ -223,7 +223,7 @@ def _test_qsvt(func):
     start_time = time.time()
     V_qsvt = apply_qsvt(V, num_ancilla=2, angle_set=angle_set)
     end_time = time.time()
-    print(f"Time for QSVT application: {end_time - start_time} seconds")
+    print(f"Time for QSVT application: {end_time - start_time:.3e} seconds")
 
     A_qsvt = utils.get_block_encoded(V_qsvt, num_ancilla=2)
 
@@ -233,13 +233,15 @@ def _test_qsvt(func):
 
     eigvals_target = jnp.sort(scaled_func(eigvals))
 
-    print("QSVT approximation error:", jnp.max(jnp.abs(eigvals_qsvt - eigvals_target)))
+    print(
+        f"QSVT approximation error: {jnp.max(jnp.abs(eigvals_qsvt - eigvals_target)):.3e}"
+    )
 
     assert jnp.allclose(eigvals_qsvt, eigvals_target, atol=1e-4)
 
 
 def _test_qsvt_imperfect(func, noise_level=0.001):
-    print(f"Testing imperfect QSVT with noise level: {noise_level}")
+    print(f"Testing imperfect QSVT with noise level: {noise_level:.3e}")
 
     dim = 100
     polydeg = 10
@@ -274,7 +276,7 @@ def _test_qsvt_imperfect(func, noise_level=0.001):
     start_time = time.time()
     V_qsvt = apply_qsvt_imperfect(V_sequence, num_ancilla=2, angle_set=angle_set)
     end_time = time.time()
-    print(f"Time for imperfect QSVT application: {end_time - start_time} seconds")
+    print(f"Time for imperfect QSVT application: {end_time - start_time:.3e} seconds")
 
     A_qsvt = utils.get_block_encoded(V_qsvt, num_ancilla=2)
 
@@ -285,13 +287,11 @@ def _test_qsvt_imperfect(func, noise_level=0.001):
     eigvals_target = jnp.sort(scaled_func(eigvals))
 
     print(
-        "Imperfect QSVT approximation error:",
-        jnp.max(jnp.abs(eigvals_qsvt - eigvals_target)),
+        f"Imperfect QSVT approximation error: {jnp.max(jnp.abs(eigvals_qsvt - eigvals_target)):.3e}",
     )
 
     print(
-        "Imperfect QSVT approximation relative error:",
-        jnp.max(jnp.abs(eigvals_qsvt - eigvals_target)) / noise_level,
+        f"Imperfect QSVT approximation relative error: {jnp.max(jnp.abs(eigvals_qsvt - eigvals_target)) / noise_level:.3e}",
     )
 
     assert (
@@ -322,7 +322,7 @@ def _test_inverse():
     start_time = time.time()
     V_qsvt = apply_qsvt(V, num_ancilla=2, angle_set=angle_set)
     end_time = time.time()
-    print(f"Time for inverse QSVT application: {end_time - start_time} seconds")
+    print(f"Time for inverse QSVT application: {end_time - start_time:.3e} seconds")
 
     A_qsvt = utils.get_block_encoded(V_qsvt, num_ancilla=2)
 
@@ -338,8 +338,7 @@ def _test_inverse():
     error = jnp.sort(error)[:-num_outliers]  # remove outliers
 
     print(
-        "Inverse QSVT approximation error:",
-        jnp.max(error),
+        f"Inverse QSVT approximation error: {jnp.max(error):.3e}",
     )
 
     assert jnp.allclose(error, 0, atol=10 * epsilon)
@@ -369,7 +368,7 @@ def _test_sign():
     start_time = time.time()
     V_qsvt = apply_qsvt(V, num_ancilla=2, angle_set=angle_set)
     end_time = time.time()
-    print(f"Time for sign QSVT application: {end_time - start_time} seconds")
+    print(f"Time for sign QSVT application: {end_time - start_time:.3e} seconds")
 
     A_qsvt = utils.get_block_encoded(V_qsvt, num_ancilla=2)
 
@@ -384,8 +383,7 @@ def _test_sign():
     error = jnp.sort(error)[:-num_outliers]  # remove outliers
 
     print(
-        "Sign QSVT approximation error:",
-        jnp.max(error),
+        f"Sign QSVT approximation error: {jnp.max(error):.3e}",
     )
 
     assert jnp.allclose(error, 0, atol=1e-2)
