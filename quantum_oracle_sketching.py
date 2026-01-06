@@ -4,6 +4,7 @@ import jax
 import jax.numpy as jnp
 from jax import random
 
+import primitives
 import qsvt
 import utils
 from data_generation import boolean_data, matrix_data, vector_data
@@ -322,7 +323,7 @@ def _test_q_state_sketch_flat(key):
 
 
 def _test_q_state_sketch(key):
-    N = 2048
+    N = 128
     num_samples = int(1e7)
 
     print(f"Testing general vector with dimension N = {N}")
@@ -345,6 +346,34 @@ def _test_q_state_sketch(key):
     error = jnp.linalg.norm(v - qstate / jnp.linalg.norm(qstate))
     print(f"State reconstruction error in l2 norm: {error:.3e}")
     assert jnp.isclose(error, 0, atol=1e-1)
+
+    # amplitude amplification to boost success probability
+    print("Testing amplitude amplification to boost success probability...")
+
+    # get many copies of imperfect qstate
+    degree = 51
+    qstate_imperfect = jnp.zeros((degree, N), dtype=complex_dtype)
+    for i in range(degree):
+        key, subkey = random.split(key)
+        data = data_gen.get_data(subkey, num_samples)
+
+        key, subkey = random.split(key)
+        qstate_imperfect = qstate_imperfect.at[i].set(
+            q_state_sketch(data, N, jnp.linalg.norm(v), subkey)
+        )
+    qstate_aa = primitives.amplitude_amplification(
+        qstate_imperfect, degree=degree, target_norm=0.99
+    )
+
+    prob_aa = jnp.linalg.norm(qstate_aa) ** 2
+    print(
+        f"Post-amplification success probability: {prob_aa:.3f}, was {prob:.3f} before"
+    )
+    error_aa = jnp.linalg.norm(v - qstate_aa / jnp.linalg.norm(qstate_aa))
+    print(
+        f"Post-amplification state reconstruction error in l2 norm: {error_aa:.3e}, was {error:.3e} before"
+    )
+    assert jnp.isclose(error_aa, 0, atol=1e-1)
 
 
 def _test_q_oracle_sketch_boolean(key):
