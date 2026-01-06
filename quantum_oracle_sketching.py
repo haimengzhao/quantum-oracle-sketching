@@ -68,7 +68,7 @@ def q_state_sketch(data, dim, norm, key, degree=4):
         norm: float, l2 norm of the target vector
         key: jax.random.PRNGKey, random key for generating random signs
         degree: even int, degree of the polynomial approximation for arcsin(x),
-            default 4, data size should be a multiple of 4 * degree
+            default 4, data size should be a multiple of degree
     Returns:
         quantum state sketch as an array of shape (dim,)
     """
@@ -110,25 +110,22 @@ def q_state_sketch(data, dim, norm, key, degree=4):
         * t
     )
 
-    # 5. Split into four batches of data for LCU (twice)
-    # the first LCU:
-    # we use the circuit S_a X_a H_a (c_a U_2^\dagger) X_a (c_a U_1) H_a T_a
+    # 5. LCU converts phase to sine
+    # we use the circuit S_a X_a H_a (c_a^1 U^\dagger) (c_a^0 U) X_a H_a T_a
     # where a is the ancilla and S = [[-i, 0], [0, 1]], T = [[1, 0], [0, -i]]
     # analytic calculation shows that the resulting block encoding is
-    # [[ (U_1 - U_2^\dagger)/(2i),  (U_1 + U_2^\dagger)/2     ],
-    #  [ (U_1 + U_2^\dagger)/2   , -(U_1 - U_2^\dagger)/(2i) ]]
+    # [[ (U - U^\dagger)/(2i),  (U + U^\dagger)/2     ],
+    #  [ (U + U^\dagger)/2   , -(U - U^\dagger)/(2i) ]]
     # which is a Hermitian block encoding of sin(B) with one ancilla qubit
-
-    # each batch contribution is further split into degree sub-batches
-    # to approximate arcsin(x) by a degree-d polynomial using QSVT
-
-    # when num_samples = 1e8, dim = 16, it takes about 25s
+    # Note again that this is compatible with quantum oracle sketching,
+    # since we can implement the c^0U and c^1U† unitaries simultaneously
+    # using the same samples.
 
     contribution = contribution.reshape(
-        4, degree, num_samples // (4 * degree), dim
-    )  # shape (4, degree, num_samples/(4*degree), dim)
+        degree, num_samples // degree, dim
+    )  # shape (degree, num_samples / degree, dim)
 
-    contribution = jnp.average(contribution, axis=2)  # shape (4, degree, dim)
+    contribution = jnp.average(contribution, axis=1)  # shape (degree, dim)
 
     def func(x):
         return jnp.arcsin(x) / jnp.arcsin(1)
@@ -140,40 +137,34 @@ def q_state_sketch(data, dim, norm, key, degree=4):
         cheb_domain=(-jnp.sin(1), jnp.sin(1)),
     )
 
-    block_encoding_list = []
+    U_diag = jnp.exp(1j * contribution)  # shape (degree, dim)
 
-    for i in range(2):
-        U1_diag = jnp.exp(1j * contribution[i * 2])  # shape (degree, dim)
-        U2_dagger_diag = jnp.exp(-1j * contribution[i * 2 + 1])  # shape (degree, dim)
+    sin = vectorized_diag(U_diag - U_diag.conj()) / 2j  # shape (degree, dim, dim)
+    cos = vectorized_diag(U_diag + U_diag.conj()) / 2  # shape (degree, dim, dim)
 
-        sin = vectorized_diag(U1_diag - U2_dagger_diag) / 2j  # shape (degree, dim, dim)
-        cos = vectorized_diag(U1_diag + U2_dagger_diag) / 2  # shape (degree, dim, dim)
+    block_encoding = jnp.concatenate(
+        [
+            jnp.concatenate([sin, cos], axis=1),
+            jnp.concatenate([cos, -sin], axis=1),
+        ],
+        axis=2,
+    )  # shape (degree, 2*dim, 2*dim)
 
-        block_encoding = jnp.concatenate(
-            [
-                jnp.concatenate([sin, cos], axis=1),
-                jnp.concatenate([cos, -sin], axis=1),
-            ],
-            axis=2,
-        )  # shape (degree, 2*dim, 2*dim)
-
-        # 6. Apply QSVT to approximate arcsin(x)
-        block_encoding = qsvt.apply_qsvt_imperfect(
-            block_encoding[:-1], num_ancilla=1, angle_set=angle_set
-        )  # shape (2*dim, 2*dim)
-
-        block_encoding_list.append(block_encoding)
+    # 6. Apply QSVT to approximate arcsin(x)
+    block_encoding = qsvt.apply_qsvt_imperfect(
+        block_encoding[:-1], num_ancilla=1, angle_set=angle_set
+    )  # shape (2*dim, 2*dim)
 
     # 7. Prepare the state
     # apply the block encoding to the all plus state
     # note that the qsvt applies arcsin as the real part
     # we need a second LCU to get the real part only
+    # Note again that this is compatible with quantum oracle sketching,
+    # since we can implement the c^0U and c^1U† unitaries simultaneously
+    # using the same samples.
+
     state = jnp.sum(
-        (
-            block_encoding_list[0][:dim, :dim]
-            + block_encoding_list[1][:dim, :dim].conj().T
-        )
-        / 2,
+        (block_encoding[:dim, :dim] + block_encoding[:dim, :dim].conj().T) / 2,
         axis=1,
     ) / jnp.sqrt(dim)
 
@@ -227,51 +218,39 @@ def q_oracle_sketch_matrix_element(data, dim, nnz):
         where the first two dimensions are the ancilla qubit space and the last dimension is the diagonal.
     """
 
-    # divide data into 2 batches
-    # one for cU, one for cU^\dagger in the LCU construction
-
-    cut = data[0].shape[0] // 2
-    batched_data = [
-        (data[0][:cut], data[1][:cut], data[2][:cut]),
-        (data[0][cut:], data[1][cut:], data[2][cut:]),
-    ]
-
     t = nnz
-
-    phase_seq = jnp.zeros((2, dim**2), dtype=real_dtype)
 
     # 1. construct the unitary U: |i>|j> -> exp( i * B_{ij} ) |i>|j>
     # where B_{ij} = arcsin( A_{ij} )
 
-    for i, batch in enumerate(batched_data):
-        sampled_row_indices = batch[0]
-        sampled_col_indices = batch[1]
-        sampled_values = batch[2]
-        num_samples = sampled_row_indices.shape[0]
+    sampled_row_indices = data[0]
+    sampled_col_indices = data[1]
+    sampled_values = data[2]
+    num_samples = sampled_row_indices.shape[0]
 
-        phase = jnp.zeros((dim, dim), dtype=real_dtype)
-        phase = phase.at[sampled_row_indices, sampled_col_indices].add(
-            jnp.arcsin(sampled_values)
-        )
-        phase = phase * t / num_samples
+    phase = jnp.zeros((dim, dim), dtype=real_dtype)
+    phase = phase.at[sampled_row_indices, sampled_col_indices].add(
+        jnp.arcsin(sampled_values)
+    )
+    phase = phase * t / num_samples
 
-        phase = phase.reshape(dim**2)
-
-        phase_seq = phase_seq.at[i].set(phase)
+    phase = phase.reshape(dim**2)
 
     # 2. construct the block encoding of |i>|j> -> sin(B_{ij}) |i>|j> using LCU
-    # we use the circuit S_a X_a H_a (c_a U_2^\dagger) X_a (c_a U_1) H_a T_a
+    # we use the circuit S_a X_a H_a (c_a^1 U^\dagger) (c_a^0 U) X_a H_a T_a
     # where a is the ancilla and S = [[-i, 0], [0, 1]], T = [[1, 0], [0, -i]]
     # analytic calculation shows that the resulting block encoding is
-    # [[ (U_1 - U_2^\dagger)/(2i),  (U_1 + U_2^\dagger)/2     ],
-    #  [ (U_1 + U_2^\dagger)/2   , -(U_1 - U_2^\dagger)/(2i) ]]
+    # [[ (U - U^\dagger)/(2i),  (U + U^\dagger)/2     ],
+    #  [ (U + U^\dagger)/2   , -(U - U^\dagger)/(2i) ]]
     # which is a Hermitian block encoding of sin(B) with one ancilla qubit
+    # Note again that this is compatible with quantum oracle sketching,
+    # since we can implement the c^0U and c^1U† unitaries simultaneously
+    # using the same samples.
 
-    U1_diag = jnp.exp(1j * phase_seq[0])
-    U2_dagger_diag = jnp.exp(-1j * phase_seq[1])
+    U_diag = jnp.exp(1j * phase)
 
-    sin = (U1_diag - U2_dagger_diag) / (2j)
-    cos = (U1_diag + U2_dagger_diag) / 2
+    sin = (U_diag - U_diag.conj()) / (2j)
+    cos = (U_diag + U_diag.conj()) / 2
 
     block_encoding = jnp.stack([sin, cos, cos, -sin], axis=0).reshape(2, 2, dim**2)
 
@@ -316,8 +295,8 @@ def _test_q_state_sketch_flat(key):
 
 
 def _test_q_state_sketch(key):
-    N = 16
-    num_samples = int(1e7)
+    N = 128
+    num_samples = int(1e6)
 
     print(f"Testing general vector with dimension N = {N}")
 
@@ -331,7 +310,7 @@ def _test_q_state_sketch(key):
 
     print(f"Sample size: {num_samples:.2e}")
 
-    qstate = q_state_sketch(data, N, jnp.linalg.norm(v), key, degree=10)
+    qstate = q_state_sketch(data, N, jnp.linalg.norm(v), key)
 
     prob = jnp.linalg.norm(qstate) ** 2
     print(f"Success probability: {prob:.3f}")

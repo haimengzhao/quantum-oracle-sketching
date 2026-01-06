@@ -70,6 +70,13 @@ def hermitian_block_encoding(U):
     """
     Get the Hermitian unitary block encoding from any unitary block encoding U.
     Appendix C of https://arxiv.org/pdf/2002.11649
+
+    We are safe to do this even with quantum oracle sketching,
+    since we can implement the c^0U and c^1U† unitaries simultaneously
+    using the same samples.
+    This observation also applies to LCU constructions.
+    For example, in taking the real part of a block encoding,
+    or in constructing sin and cos block encodings from phase oracles.
     """
     hadamard = jnp.array([[1, 1], [1, -1]]) / jnp.sqrt(2)
     zero_to_one = hadamard @ jnp.array([[0, 0], [1, 0]]) @ hadamard
