@@ -8,8 +8,10 @@ import qsvt
 import utils
 from data_generation import boolean_data, matrix_data, vector_data
 
-complex_dtype = jnp.complex128
-real_dtype = jnp.float64
+complex_dtype = jnp.complex64
+real_dtype = jnp.float32
+
+vectorized_diag = jax.vmap(jnp.diag)
 
 
 def q_state_sketch_flat_unitary(data, dim):
@@ -56,7 +58,7 @@ def q_state_sketch_flat(data, dim):
     return state
 
 
-def q_state_sketch(data, dim, norm, key, degree=10):
+def q_state_sketch(data, dim, norm, key, degree=4):
     """
     Construct quantum state sketch from vector data samples.
 
@@ -66,7 +68,7 @@ def q_state_sketch(data, dim, norm, key, degree=10):
         norm: float, l2 norm of the target vector
         key: jax.random.PRNGKey, random key for generating random signs
         degree: even int, degree of the polynomial approximation for arcsin(x),
-            default 10, data size should be a multiple of 2 * degree
+            default 4, data size should be a multiple of 2 * degree
     Returns:
         quantum state sketch as an array of shape (dim,)
     """
@@ -96,12 +98,12 @@ def q_state_sketch(data, dim, norm, key, degree=10):
     # 3. Convert parity to sign factors (-1)^(j_l \cdot u)
     # Shape: (num_samples, dim)
     # 0 -> +1, 1 -> -1
-    interaction_signs = 1.0 - 2.0 * parity.astype(jnp.float32)
+    interaction_signs = 1 - 2 * parity
 
     # 4. Contribution of each sample
     # b_l * (-1)^(j_l \cdot u) * t
     # sampled_values[:, None] broadcasts to (num_samples, 1) to multiply against (num_samples, dim)
-    t = dim / (norm * 5)
+    t = dim / norm / 3
     contribution = (
         (random_signs[sampled_indices] * sampled_values)[:, None]
         * interaction_signs
@@ -119,15 +121,16 @@ def q_state_sketch(data, dim, norm, key, degree=10):
     # each batch contribution is further split into degree sub-batches
     # to approximate arcsin(x) by a degree-d polynomial using QSVT
 
+    # when num_samples = 1e8, dim = 16, it takes about 25s
+
     contribution = contribution.reshape(
         2, degree, num_samples // (2 * degree), dim
     )  # shape (2, degree, num_samples/(2*degree), dim)
+
     contribution = jnp.average(contribution, axis=2)  # shape (2, degree, dim)
 
     U1_diag = jnp.exp(1j * contribution[0])  # shape (degree, dim)
     U2_dagger_diag = jnp.exp(-1j * contribution[1])  # shape (degree, dim)
-
-    vectorized_diag = jax.vmap(jnp.diag)
 
     sin = vectorized_diag(U1_diag - U2_dagger_diag) / (2j)  # shape (degree, dim, dim)
     cos = vectorized_diag(U1_diag + U2_dagger_diag) / 2  # shape (degree, dim, dim)
@@ -142,7 +145,7 @@ def q_state_sketch(data, dim, norm, key, degree=10):
 
     # 6. Apply QSVT to approximate arcsin(x)
     def func(x):
-        return jnp.arcsin(x) / jnp.arcsin(1.0)
+        return jnp.arcsin(x) / jnp.arcsin(1)
 
     angle_set = qsvt.get_qsvt_angles(
         func=func,
@@ -155,14 +158,14 @@ def q_state_sketch(data, dim, norm, key, degree=10):
         block_encoding[:-1], num_ancilla=1, angle_set=angle_set
     )  # shape (2*dim, 2*dim)
 
-    # 6. Prepare the state
+    # 7. Prepare the state
     # apply the block encoding to the all plus state
     # note that the qsvt applies arcsin as the real part
     state = jnp.sum(
         (block_encoding[:dim, :dim] + block_encoding[:dim, :dim].conj().T) / 2, axis=1
     ) / jnp.sqrt(dim)
 
-    # apply inverse randomized Hadamard transform to restore the original vector
+    # 8. Apply inverse randomized Hadamard transform to restore the original vector
     hadamard = utils.unnormalized_hadamard_transform(int(jnp.round(jnp.log2(dim))))
     state = hadamard @ state / jnp.sqrt(dim)
     state = random_signs * state
@@ -302,7 +305,7 @@ def _test_q_state_sketch_flat(key):
 
 def _test_q_state_sketch(key):
     N = 16
-    num_samples = 10000000
+    num_samples = int(1e7)
 
     print(f"Testing general vector with dimension N = {N}")
 
@@ -317,6 +320,9 @@ def _test_q_state_sketch(key):
     print(f"Sample size: {num_samples:.2e}")
 
     qstate = q_state_sketch(data, N, jnp.linalg.norm(v), key, degree=10)
+
+    prob = jnp.linalg.norm(qstate) ** 2
+    print(f"Success probability: {prob:.3f}")
 
     error = jnp.linalg.norm(v - qstate / jnp.linalg.norm(qstate))
     print(f"State reconstruction error in l2 norm: {error:.3e}")
