@@ -85,30 +85,55 @@ def q_state_sketch(data, dim, norm, key, degree=4):
     # Shape: (dim,)
     u_vec = jnp.arange(dim, dtype=sampled_indices.dtype)
 
-    # 2. Compute the bitwise interaction j_l \cdot u (mod 2)
-    # We use broadcasting to create the interaction matrix of shape (num_samples, dim).
-    # sampled_indices[:, None] is (num_samples, 1)
-    # u_vec[None, :] is (1, dim)
-    bitwise_intersection = sampled_indices[:, None] & u_vec[None, :]
+    # 2. Compute the bitwise interaction j \cdot u (mod 2)
+    # Instead of computing for each sample, which is costly for large num_samples,
+    # we compute for all possible j and u.
+    j_vec = jnp.arange(dim, dtype=sampled_indices.dtype)  # shape (dim,)
+    bitwise_and = jnp.bitwise_and(j_vec[:, None], u_vec[None, :])  # shape (dim, dim)
 
     # jax.lax.population_count counts the number of set bits (Hamming weight).
-    # The inner product over GF(2) is the parity of the intersection.
-    parity = jax.lax.population_count(bitwise_intersection) % 2
+    # The inner product over GF(2) is the parity of the and.
+    bit_inner_product = jax.lax.population_count(bitwise_and) % 2  # shape (dim, dim)
 
-    # 3. Convert parity to sign factors (-1)^(j_l \cdot u)
-    # Shape: (num_samples, dim)
+    # 3. Convert inner products to sign factors (-1)^(j \cdot u)
     # 0 -> +1, 1 -> -1
-    interaction_signs = 1 - 2 * parity
+    inner_prod_signs = 1 - 2 * bit_inner_product  # shape (dim, dim)
+
+    # 4. Aggregate samples according to the sampled indices
+    # each sampled index has a contribution to all basis states u
+    # this pre-aggregation helps get rid of dependency on num_samples in later steps
+    aggregated_sampled_values = jnp.zeros((degree, dim), dtype=real_dtype)
+
+    # first divide samples into degree groups
+    sampled_indices = sampled_indices.reshape(
+        degree, -1
+    )  # shape (degree, num_samples / degree)
+    sampled_values = sampled_values.reshape(
+        degree, -1
+    )  # shape (degree, num_samples / degree)
+
+    # aggregate
+    # no more dependency on num_samples from here
+    aggregated_sampled_values = aggregated_sampled_values.at[
+        jnp.arange(degree)[:, None], sampled_indices
+    ].add(sampled_values)
+
+    # average
+    aggregated_sampled_values = aggregated_sampled_values / (num_samples / degree)
+
+    # apply random signs
+    aggregated_sampled_values = aggregated_sampled_values * random_signs[None, :]
+    # shape (degree, dim), corresponding to (degree, j)
 
     # 4. Contribution of each sample
-    # b_l * (-1)^(j_l \cdot u) * t
-    # sampled_values[:, None] broadcasts to (num_samples, 1) to multiply against (num_samples, dim)
+    # sum_l (b_l (-1)^h(j_l)) * (-1)^(j_l \cdot u) * t / M
+    # = sum_l (b_l / M * (-1)^h(j_l)) sum_j 1[j_l = j] * (-1)^(j \cdot u) * t
+    # = sum_j ( sum_l b_l / M * (-1)^h(j_l) 1[j_l = j] ) * (-1)^(j \cdot u) * t
+    # = sum_j ( aggregated_sampled_values[j] ) * (inner_prod_signs[j, u]) *  t
     t = dim / norm / 3
     contribution = (
-        (random_signs[sampled_indices] * sampled_values)[:, None]
-        * interaction_signs
-        * t
-    )
+        aggregated_sampled_values @ inner_prod_signs
+    ) * t  # shape (degree, dim)
 
     # 5. LCU converts phase to sine
     # we use the circuit S_a X_a H_a (c_a^1 U^\dagger) (c_a^0 U) X_a H_a T_a
@@ -120,12 +145,6 @@ def q_state_sketch(data, dim, norm, key, degree=4):
     # Note again that this is compatible with quantum oracle sketching,
     # since we can implement the c^0U and c^1U† unitaries simultaneously
     # using the same samples.
-
-    contribution = contribution.reshape(
-        degree, num_samples // degree, dim
-    )  # shape (degree, num_samples / degree, dim)
-
-    contribution = jnp.average(contribution, axis=1)  # shape (degree, dim)
 
     def func(x):
         return jnp.arcsin(x) / jnp.arcsin(1)
@@ -295,8 +314,8 @@ def _test_q_state_sketch_flat(key):
 
 
 def _test_q_state_sketch(key):
-    N = 128
-    num_samples = int(1e6)
+    N = 2048
+    num_samples = int(1e7)
 
     print(f"Testing general vector with dimension N = {N}")
 
