@@ -3,6 +3,14 @@ import jax.numpy as jnp
 from jax import random
 
 
+def unnormalized_hadamard_transform(n):
+    H = jnp.array([[1.0, 1.0], [1.0, -1.0]])
+    H_n = H
+    for _ in range(n - 1):
+        H_n = jnp.kron(H_n, H)
+    return H_n
+
+
 def generate_random_unitary(key, dim):
     """Generate a random unitary matrix of size n x n."""
     A = random.normal(key, (dim, dim)) + 1j * random.normal(key, (dim, dim))
@@ -27,7 +35,7 @@ def generate_random_hermitian(key, dim):
     A = (A + A.conj().T) / 2
     # Normalize the matrix to have norm bounded by 1
     norm = jnp.linalg.norm(A, ord=2)
-    A = A / norm
+    A = A / norm / 5
     return A
 
 
@@ -59,7 +67,10 @@ def random_halsmos_dilation(key, dim):
 
 
 def hermitian_block_encoding(U):
-    """Get the Hermitian unitary block encoding from any unitary block encoding U."""
+    """
+    Get the Hermitian unitary block encoding from any unitary block encoding U.
+    Appendix C of https://arxiv.org/pdf/2002.11649
+    """
     hadamard = jnp.array([[1, 1], [1, -1]]) / jnp.sqrt(2)
     zero_to_one = hadamard @ jnp.array([[0, 0], [1, 0]]) @ hadamard
     one_to_zero = hadamard @ jnp.array([[0, 1], [0, 0]]) @ hadamard

@@ -102,7 +102,7 @@ class PolyTaylorSeries(PolyGenerator):
             return cheb_poly
 
 
-def get_qsvt_angles(func, degree, rescale):
+def get_qsvt_angles(func, degree, rescale, cheb_domain=(-1, 1)):
     """
     Get QSVT angles for a given target function.
 
@@ -110,16 +110,18 @@ def get_qsvt_angles(func, degree, rescale):
         func: target function to approximate
         degree: degree of the polynomial approximation
         rescale: scaling factor to ensure the function is bounded within [-1, 1]
-
+        cheb_domain: domain over which the Chebyshev fit is to be performed, default is (-1, 1)
     Returns:
         angle_set: array of QSVT angles
     """
-    poly = pyqsp.poly.PolyTaylorSeries().taylor_series(
+    poly = PolyTaylorSeries().taylor_series(
         func=func,
         degree=degree,
         max_scale=rescale,
+        ensure_bounded=False,
         chebyshev_basis=True,
-        cheb_samples=2 * degree,
+        cheb_samples=100 * degree,
+        cheb_domain=cheb_domain,
     )
 
     (phi_set, red_phiset, parity) = angle_sequence.QuantumSignalProcessingPhases(
@@ -232,13 +234,16 @@ def apply_qsvt(U, num_ancilla, angle_set):
     mask = jnp.concatenate([jnp.array([1.0]), -jnp.ones((2**num_ancilla) - 1)])
     qsp_op_phase_pattern = jnp.repeat(mask, dim)
 
+    # apply QSP rotations and unitaries
+    # Eq. (12) in https://arxiv.org/pdf/2002.11649
+    # using diagonal element-wise multiplication for efficiency
+    # we add an additional -i phase to turn imaginary parts into real parts
+    # so that the polynomial is implemented as the real part of the block encoding
+
     circ = jnp.exp(1j * (-jnp.pi / 2) * (angle_set.shape[0])) * jnp.diag(
         jnp.exp(1j * angle_set[0] * qsp_op_phase_pattern)
     )
 
-    # apply QSP rotations and unitaries
-    # Eq. (12) in https://arxiv.org/pdf/2002.11649
-    # using diagonal element-wise multiplication for efficiency
     for angle in angle_set[1:]:
         circ = circ @ U * jnp.exp(1j * angle * qsp_op_phase_pattern)[None, :]
 
