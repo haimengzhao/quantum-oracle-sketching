@@ -4,12 +4,102 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pyqsp
+import scipy
 from jax import random
 from pyqsp import angle_sequence
+from pyqsp.poly import PolyGenerator
 
 import utils
 
 jax.config.update("jax_enable_x64", True)
+
+
+class PolyTaylorSeries(PolyGenerator):
+    """
+    Base class for PolySign and PolyThreshold,
+    modified from pyqsp.poly.PolyTaylorSeries to include cheb_domain parameter,
+    which specifies the domain over which the Chebyshev fit is to be performed.
+    """
+
+    def taylor_series(
+        self,
+        func,
+        degree,
+        ensure_bounded=True,
+        return_scale=False,
+        npts=100,
+        max_scale=0.9,
+        chebyshev_basis=False,
+        cheb_samples=20,
+        cheb_domain=(-1, 1),  # ADDED
+    ):
+        """
+        If chebyshev_basis is True:
+            Return numpy Chebyshev approximation for func, using numpy methods for Chebyshev approximation of specified degree.
+            We also evaluate the mean absolute difference on equispaced points over the interval [-1,1].
+
+        If chebyshev_basis is False:
+            Return numpy Polynomial approximation for func, constructed using
+            taylor series, of specified degree.
+            We also evaluate the mean absolute difference on equispaced points over the interval [-1,1].
+        """
+
+        # Note: PolyTaylorSeries now no longer generates approximating Taylor polynomials, but only Chebyshev interpolations as contained in the assured branch indicated below. This exhibits better stability and convergence.
+
+        cheb_samples = (
+            2 * degree
+        )  # Set to prevent aliasing; note that all methods calling TaylorSeries implicitly have their cheb_samples specifications overruled here.
+        # Generate x and y values for fit according to func; note use of chebyshev nodes of the first kind.
+        samples = np.polynomial.chebyshev.chebpts1(cheb_samples)
+        scale = 1.0  # Binding variable.
+
+        vals = np.array(list(map(func, samples)))
+
+        # ADDED
+        mask = (samples >= cheb_domain[0]) & (samples <= cheb_domain[1])
+
+        # Generate cheb fit for function.
+        # ORIGINAL: cheb_coefs = np.polynomial.chebyshev.chebfit(samples, vals, degree)
+        cheb_coefs = np.polynomial.chebyshev.chebfit(samples, vals, degree, w=mask)
+
+        # Generate chebyshev polynomial object from coefs.
+        cheb_poly = np.polynomial.chebyshev.Chebyshev(cheb_coefs)
+
+        # Determine maximum over interval and rescale.
+        if ensure_bounded:
+            # Minimize polynomial and negative of polynomial to find overall bound on absolute value.
+            res_1 = scipy.optimize.minimize(
+                -1 * cheb_poly, (0.1,), bounds=[cheb_domain]
+            )
+            res_2 = scipy.optimize.minimize(cheb_poly, (0.1,), bounds=[cheb_domain])
+            pmax_1 = res_1.x[0]
+            pmax_2 = res_2.x[0]
+
+            # Compute the smaller of the two rescaling values.
+            arg_array = np.array([pmax_1, pmax_2])
+            max_index = np.argmax([abs(cheb_poly(pmax_1)), abs(cheb_poly(pmax_2))])
+            scale = 1.0 / np.max([abs(cheb_poly(pmax_1)), abs(cheb_poly(pmax_2))])
+
+            # Compute overal rescaling factor and apply to poly approx.
+            scale = scale * max_scale
+            print(
+                f"[PolyTaylorSeries] (Cheb) max {scale} is at {arg_array[max_index]}: normalizing"
+            )
+            cheb_poly = scale * cheb_poly
+
+        # Determine average error on interval and print.
+        adat = np.linspace(cheb_domain[0], cheb_domain[1], npts)
+        pdat = cheb_poly(adat)
+        edat = scale * func(adat)  # Compare to rescaled function.
+        avg_err = abs(edat - pdat).mean()
+        print(
+            f"[PolyTaylorSeries] (Cheb) average error = {avg_err} in the domain [{cheb_domain[0]}, {cheb_domain[1]}] using degree {degree}"
+        )
+
+        if ensure_bounded and return_scale:
+            return cheb_poly, scale
+        else:
+            return cheb_poly
 
 
 def get_qsvt_angles(func, degree, rescale):
@@ -398,7 +488,7 @@ if __name__ == "__main__":
         return x**2
 
     def func_odd(x):
-        return np.arcsin(x * np.sin(1.0))
+        return np.arcsin(np.sin(1.0) * x)
 
     # time profiling
     import time
