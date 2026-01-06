@@ -29,6 +29,7 @@ def amplitude_amplification(
         target_norm: float, the target norm for amplitude amplification scaling.
         threshold: float or None, the threshold for amplitude amplification.
             If None, defaults to the norm of the unnormalized state divided by 2.
+            Minimum value is 1e-2 for numerical stability.
 
     Returns:
         transformed_state: array of shape (dim,), the state vector after amplitude amplification.
@@ -40,16 +41,11 @@ def amplitude_amplification(
         raise ValueError("The input state has zero norm and cannot be amplified.")
 
     if threshold is None:
-        threshold = norm / 2
+        threshold = max(norm / 2, 1e-2)
 
     # Get QSVT angles for the sign function
     angle_set, scale = qsvt.get_qsvt_angles_sign(
         degree=degree, threshold=float(threshold), rescale=target_norm
-    )
-
-    print(f"Amplitude amplification scaling factor: {scale}")
-    print(
-        f"Angle set length: {len(angle_set)}, degree: {degree}, threshold: {threshold}"
     )
 
     def _embed(state):

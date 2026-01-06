@@ -6,6 +6,7 @@ class matrix_data:
     def __init__(self, matrix):
         self.matrix = matrix
         self.shape = matrix.shape
+        self.num_generated_samples = 0
 
     def get_matrix_element_data(self, key, num_samples):
         # uniform random samples of non-zero matrix elements
@@ -17,6 +18,9 @@ class matrix_data:
         sampled_rows = rows[sampled_indices]
         sampled_cols = cols[sampled_indices]
         sampled_values = self.matrix[sampled_rows, sampled_cols]
+
+        self.num_generated_samples += num_samples
+
         return sampled_rows, sampled_cols, sampled_values
 
     def get_row_data(self, key, num_samples):
@@ -26,6 +30,9 @@ class matrix_data:
             key, jnp.arange(num_rows), shape=(num_samples,), replace=True
         )
         sampled_values = self.matrix[sampled_rows]
+
+        self.num_generated_samples += num_samples
+
         return sampled_rows, sampled_values
 
 
@@ -33,6 +40,7 @@ class vector_data:
     def __init__(self, vector):
         self.vector = vector
         self.length = vector.shape[0]
+        self.num_generated_samples = 0
 
     def get_data(self, key, num_samples):
         # uniform random components of the vector
@@ -40,6 +48,9 @@ class vector_data:
             key, jnp.arange(self.length), shape=(num_samples,), replace=True
         )
         sampled_values = self.vector[sampled_indices]
+
+        self.num_generated_samples += num_samples
+
         return sampled_indices, sampled_values
 
 
@@ -47,6 +58,7 @@ class boolean_data:
     def __init__(self, truth_table):
         self.truth_table = truth_table
         self.length = truth_table.shape[0]
+        self.num_generated_samples = 0
 
     def get_data(self, key, num_samples):
         # uniform random queries
@@ -54,4 +66,7 @@ class boolean_data:
             key, jnp.arange(self.length), shape=(num_samples,), replace=True
         )
         sampled_values = self.truth_table[sampled_indices]
+
+        self.num_generated_samples += num_samples
+
         return sampled_indices, sampled_values

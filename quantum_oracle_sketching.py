@@ -352,6 +352,7 @@ def _test_q_state_sketch(key):
 
     # get many copies of imperfect qstate
     degree = 51
+    target_norm = 0.98
     qstate_imperfect = jnp.zeros((degree, N), dtype=complex_dtype)
     for i in range(degree):
         key, subkey = random.split(key)
@@ -362,7 +363,7 @@ def _test_q_state_sketch(key):
             q_state_sketch(data, N, jnp.linalg.norm(v), subkey)
         )
     qstate_aa = primitives.amplitude_amplification(
-        qstate_imperfect, degree=degree, target_norm=0.99
+        qstate_imperfect, degree=degree, target_norm=target_norm
     )
 
     prob_aa = jnp.linalg.norm(qstate_aa) ** 2
