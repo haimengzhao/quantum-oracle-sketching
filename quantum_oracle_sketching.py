@@ -18,6 +18,8 @@ def q_state_sketch_flat_unitary(data, dim):
     """
     Construct quantum state sketch preparation unitary from vector data samples.
 
+    Use 1 ancilla qubit.
+
     Assume that the vector is flat: all components are plus or minus one.
 
     Args:
@@ -43,6 +45,8 @@ def q_state_sketch_flat(data, dim):
     """
     Construct quantum state sketch from vector data samples.
 
+    Use 1 ancilla qubit.
+
     Assume that the vector is flat: all components are plus or minus one.
 
     Args:
@@ -61,6 +65,9 @@ def q_state_sketch_flat(data, dim):
 def q_state_sketch(data, dim, norm, key, degree=4):
     """
     Construct quantum state sketch from vector data samples.
+
+    Use 2 ancilla qubit.
+    One for the first LCU and QSVT, one for the second LCU to extract real part.
 
     Args:
         data: tuple of (sampled_indices, sampled_values)
@@ -200,6 +207,8 @@ def q_oracle_sketch_boolean(data, dim):
     """
     Construct quantum oracle sketch from boolean function data samples.
 
+    Use 0 ancilla qubit.
+
     Args:
         data: tuple of (sampled_indices, sampled_values in {0,1})
         dim: int, support size of the target boolean function
@@ -220,21 +229,19 @@ def q_oracle_sketch_boolean(data, dim):
 
 def q_oracle_sketch_matrix_element(data, dim, nnz):
     """
-    Construct a nearly Hermitian block encoding of
+    Construct a Hermitian block encoding of
     the sparse element oracle |i>|j> -> A_{ij} |i>|j> from matrix data samples.
 
-    Assume that the matrix elements are in [-1,1].
+    Use 1 ancilla qubit.
 
-    Strict Hermiticity condition is not guaranteed
-    because the construction uses two separate batches of random data
-    for the two unitaries in the LCU construction.
+    Assume that the matrix elements are in [-1,1].
 
     Args:
         data: tuple of (sampled_row_indices, sampled_col_indices, sampled_values)
         dim: int, dimension of the target matrix
         nnz: int, number of non-zero elements in the matrix.
     Returns:
-        a (nearly) Hermitian block encoding of the sparse element oracle as an array of shape (2, 2, dim**2)
+        a Hermitian block encoding of the sparse element oracle as an array of shape (2, 2, dim**2)
         where the first two dimensions are the ancilla qubit space and the last dimension is the diagonal.
     """
 

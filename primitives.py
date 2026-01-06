@@ -14,6 +14,8 @@ def amplitude_amplification(
 ):
     """Perform amplitude amplification on an unnormalized quantum state.
 
+    Implicitly increasing num_ancilla by 1.
+
     Note that we can safely ingnore the garbage blocks from the block encoding
     that gives us the unnormalized state, since they never enter the relevant
     subspace for amplitude amplification.
@@ -22,7 +24,7 @@ def amplitude_amplification(
 
     Args:
         unnormalized_state: array of shape (dim,), the unnormalized quantum state vector.
-        degree: int, the number of amplitude amplification iterations.
+        degree: odd int, the degree of the QSVT polynomial for amplitude amplification.
         target_norm: float, the target norm for amplitude amplification scaling.
         threshold: float or None, the threshold for amplitude amplification.
             If None, defaults to the norm of the unnormalized state divided by 2.
@@ -67,11 +69,15 @@ def amplitude_amplification(
         halmos_block_encoding, num_ancilla=1, angle_set=angle_set
     )
 
+    # Extract the block encoded matrix
     transformed_matrix = utils.get_block_encoded(
         transformed_block_encoding, num_ancilla=1
     )
+
     # Use LCU to extract the real part
     transformed_matrix = (transformed_matrix + transformed_matrix.conj().T) / 2
+
+    # Extract the transformed state
     transformed_state = transformed_matrix[:-1, -1]
 
     return transformed_state
@@ -83,7 +89,7 @@ Tests
 
 
 def _test_amplitude_amplification(key):
-    dim = 10
+    dim = 1000
     initial_norm = 0.2
     target_norm = 0.99
     degree = 51
