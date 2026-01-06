@@ -35,12 +35,17 @@ def generate_random_hermitian(key, dim):
     A = (A + A.conj().T) / 2
     # Normalize the matrix to have norm bounded by 1
     norm = jnp.linalg.norm(A, ord=2)
-    A = A / norm / 5
+    A = A / norm
     return A
 
 
 def halmos_dilation(A):
-    """Construct the Halmos dilation of a Hermitian matrix A."""
+    """
+    Construct the Halmos dilation of a Hermitian matrix A.
+
+    Note that the canonical Halmos dilation is a Hermitian unitary
+    block encoding of A.
+    """
     dim = A.shape[0]
     # matrix square root
     sqrt_A = jax.scipy.linalg.sqrtm(jnp.eye(dim) - A @ A)

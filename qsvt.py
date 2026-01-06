@@ -29,21 +29,9 @@ class PolyTaylorSeries(PolyGenerator):
         return_scale=False,
         npts=100,
         max_scale=0.9,
-        chebyshev_basis=False,
-        cheb_samples=20,
         cheb_domain=(-1, 1),  # ADDED
     ):
-        """
-        If chebyshev_basis is True:
-            Return numpy Chebyshev approximation for func, using numpy methods for Chebyshev approximation of specified degree.
-            We also evaluate the mean absolute difference on equispaced points over the interval [-1,1].
-
-        If chebyshev_basis is False:
-            Return numpy Polynomial approximation for func, constructed using
-            taylor series, of specified degree.
-            We also evaluate the mean absolute difference on equispaced points over the interval [-1,1].
-        """
-
+        # MODIFIED: removed redundant variables chebyshev_basis, cheb_samples
         # Note: PolyTaylorSeries now no longer generates approximating Taylor polynomials, but only Chebyshev interpolations as contained in the assured branch indicated below. This exhibits better stability and convergence.
 
         cheb_samples = (
@@ -55,7 +43,8 @@ class PolyTaylorSeries(PolyGenerator):
 
         vals = np.array(list(map(func, samples)))
 
-        # ADDED
+        # ADDED: mask to restrict fitting to cheb_domain
+        # will be used as weights in chebfit
         mask = (samples >= cheb_domain[0]) & (samples <= cheb_domain[1])
 
         # Generate cheb fit for function.
@@ -102,7 +91,7 @@ class PolyTaylorSeries(PolyGenerator):
             return cheb_poly
 
 
-def get_qsvt_angles(func, degree, rescale, cheb_domain=(-1, 1)):
+def get_qsvt_angles(func, degree, rescale, cheb_domain=(-1, 1), ensure_bounded=True):
     """
     Get QSVT angles for a given target function.
 
@@ -118,9 +107,7 @@ def get_qsvt_angles(func, degree, rescale, cheb_domain=(-1, 1)):
         func=func,
         degree=degree,
         max_scale=rescale,
-        ensure_bounded=False,
-        chebyshev_basis=True,
-        cheb_samples=100 * degree,
+        ensure_bounded=ensure_bounded,
         cheb_domain=cheb_domain,
     )
 
@@ -186,6 +173,7 @@ def get_qsvt_angles_sign(degree, threshold=0.1, rescale=0.9):
         rescale: scaling factor to ensure the function is bounded within [-1, 1]
     Returns:
         angle_set: array of QSVT angles
+        scale: scaling factor
     """
 
     poly = pyqsp.poly.PolySign()

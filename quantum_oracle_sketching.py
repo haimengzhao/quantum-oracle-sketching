@@ -8,8 +8,8 @@ import qsvt
 import utils
 from data_generation import boolean_data, matrix_data, vector_data
 
-complex_dtype = jnp.complex64
-real_dtype = jnp.float32
+complex_dtype = jnp.complex128
+real_dtype = jnp.float64
 
 vectorized_diag = jax.vmap(jnp.diag)
 
@@ -154,6 +154,7 @@ def q_state_sketch(data, dim, norm, key, degree=4):
         degree=degree,
         rescale=1.0,
         cheb_domain=(-jnp.sin(1), jnp.sin(1)),
+        ensure_bounded=False,
     )
 
     U_diag = jnp.exp(1j * contribution)  # shape (degree, dim)
