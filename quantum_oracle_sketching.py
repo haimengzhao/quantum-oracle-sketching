@@ -68,7 +68,7 @@ def q_state_sketch(data, dim, norm, key, degree=4):
         norm: float, l2 norm of the target vector
         key: jax.random.PRNGKey, random key for generating random signs
         degree: even int, degree of the polynomial approximation for arcsin(x),
-            default 4, data size should be a multiple of 2 * degree
+            default 4, data size should be a multiple of 4 * degree
     Returns:
         quantum state sketch as an array of shape (dim,)
     """
@@ -110,7 +110,8 @@ def q_state_sketch(data, dim, norm, key, degree=4):
         * t
     )
 
-    # 5. Split into two batches of data for LCU
+    # 5. Split into four batches of data for LCU (twice)
+    # the first LCU:
     # we use the circuit S_a X_a H_a (c_a U_2^\dagger) X_a (c_a U_1) H_a T_a
     # where a is the ancilla and S = [[-i, 0], [0, 1]], T = [[1, 0], [0, -i]]
     # analytic calculation shows that the resulting block encoding is
@@ -124,26 +125,11 @@ def q_state_sketch(data, dim, norm, key, degree=4):
     # when num_samples = 1e8, dim = 16, it takes about 25s
 
     contribution = contribution.reshape(
-        2, degree, num_samples // (2 * degree), dim
-    )  # shape (2, degree, num_samples/(2*degree), dim)
+        4, degree, num_samples // (4 * degree), dim
+    )  # shape (4, degree, num_samples/(4*degree), dim)
 
-    contribution = jnp.average(contribution, axis=2)  # shape (2, degree, dim)
+    contribution = jnp.average(contribution, axis=2)  # shape (4, degree, dim)
 
-    U1_diag = jnp.exp(1j * contribution[0])  # shape (degree, dim)
-    U2_dagger_diag = jnp.exp(-1j * contribution[1])  # shape (degree, dim)
-
-    sin = vectorized_diag(U1_diag - U2_dagger_diag) / (2j)  # shape (degree, dim, dim)
-    cos = vectorized_diag(U1_diag + U2_dagger_diag) / 2  # shape (degree, dim, dim)
-
-    block_encoding = jnp.concatenate(
-        [
-            jnp.concatenate([sin, cos], axis=1),
-            jnp.concatenate([cos, -sin], axis=1),
-        ],
-        axis=2,
-    )  # shape (degree, 2*dim, 2*dim)
-
-    # 6. Apply QSVT to approximate arcsin(x)
     def func(x):
         return jnp.arcsin(x) / jnp.arcsin(1)
 
@@ -154,15 +140,41 @@ def q_state_sketch(data, dim, norm, key, degree=4):
         cheb_domain=(-jnp.sin(1), jnp.sin(1)),
     )
 
-    block_encoding = qsvt.apply_qsvt_imperfect(
-        block_encoding[:-1], num_ancilla=1, angle_set=angle_set
-    )  # shape (2*dim, 2*dim)
+    block_encoding_list = []
+
+    for i in range(2):
+        U1_diag = jnp.exp(1j * contribution[i * 2])  # shape (degree, dim)
+        U2_dagger_diag = jnp.exp(-1j * contribution[i * 2 + 1])  # shape (degree, dim)
+
+        sin = vectorized_diag(U1_diag - U2_dagger_diag) / 2j  # shape (degree, dim, dim)
+        cos = vectorized_diag(U1_diag + U2_dagger_diag) / 2  # shape (degree, dim, dim)
+
+        block_encoding = jnp.concatenate(
+            [
+                jnp.concatenate([sin, cos], axis=1),
+                jnp.concatenate([cos, -sin], axis=1),
+            ],
+            axis=2,
+        )  # shape (degree, 2*dim, 2*dim)
+
+        # 6. Apply QSVT to approximate arcsin(x)
+        block_encoding = qsvt.apply_qsvt_imperfect(
+            block_encoding[:-1], num_ancilla=1, angle_set=angle_set
+        )  # shape (2*dim, 2*dim)
+
+        block_encoding_list.append(block_encoding)
 
     # 7. Prepare the state
     # apply the block encoding to the all plus state
     # note that the qsvt applies arcsin as the real part
+    # we need a second LCU to get the real part only
     state = jnp.sum(
-        (block_encoding[:dim, :dim] + block_encoding[:dim, :dim].conj().T) / 2, axis=1
+        (
+            block_encoding_list[0][:dim, :dim]
+            + block_encoding_list[1][:dim, :dim].conj().T
+        )
+        / 2,
+        axis=1,
     ) / jnp.sqrt(dim)
 
     # 8. Apply inverse randomized Hadamard transform to restore the original vector
