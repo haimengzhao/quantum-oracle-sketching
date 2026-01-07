@@ -1,6 +1,17 @@
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from os import devnull
+
 import jax
 import jax.numpy as jnp
 from jax import random
+
+
+@contextmanager
+def suppress_stdout_stderr():
+    """A context manager that redirects stdout and stderr to devnull"""
+    with open(devnull, "w") as fnull:
+        with redirect_stderr(fnull) as err, redirect_stdout(fnull) as out:
+            yield (err, out)
 
 
 def unnormalized_hadamard_transform(n):
