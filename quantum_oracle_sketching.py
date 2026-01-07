@@ -354,17 +354,18 @@ def _test_q_state_sketch(key):
     degree = 51
     target_norm = 0.98
     qstate_imperfect = jnp.zeros((degree, N), dtype=complex_dtype)
-    for i in range(degree):
-        key, subkey = random.split(key)
-        data = data_gen.get_data(subkey, num_samples)
+    with utils.suppress_stdout_stderr():
+        for i in range(degree):
+            key, subkey = random.split(key)
+            data = data_gen.get_data(subkey, num_samples)
 
-        key, subkey = random.split(key)
-        qstate_imperfect = qstate_imperfect.at[i].set(
-            q_state_sketch(data, N, jnp.linalg.norm(v), subkey)
+            key, subkey = random.split(key)
+            qstate_imperfect = qstate_imperfect.at[i].set(
+                q_state_sketch(data, N, jnp.linalg.norm(v), subkey)
+            )
+        qstate_aa = primitives.amplitude_amplification(
+            qstate_imperfect, degree=degree, target_norm=target_norm
         )
-    qstate_aa = primitives.amplitude_amplification(
-        qstate_imperfect, degree=degree, target_norm=target_norm
-    )
 
     prob_aa = jnp.linalg.norm(qstate_aa) ** 2
     print(
@@ -375,6 +376,8 @@ def _test_q_state_sketch(key):
         f"Post-amplification state reconstruction error in l2 norm: {error_aa:.3e}, was {error:.3e} before"
     )
     assert jnp.isclose(error_aa, 0, atol=1e-1)
+
+    print(f"Total number of samples used: {data_gen.num_generated_samples:.3e}")
 
 
 def _test_q_oracle_sketch_boolean(key):
