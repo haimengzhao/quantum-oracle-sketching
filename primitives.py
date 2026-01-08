@@ -41,7 +41,7 @@ def amplitude_amplification(
         raise ValueError("The input state has zero norm and cannot be amplified.")
 
     if threshold is None:
-        threshold = max(norm / 2, 1e-2)
+        threshold = max(norm * 0.5, 1e-2)
 
     # Get QSVT angles for the sign function
     angle_set, scale = qsvt.get_qsvt_angles_sign(

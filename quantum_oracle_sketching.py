@@ -165,10 +165,12 @@ def q_state_sketch(data, dim, norm, key, degree=4):
         ensure_bounded=False,
     )
 
-    U_diag = jnp.exp(1j * contribution)  # shape (degree, dim)
-
-    sin = vectorized_diag(U_diag - U_diag.conj()) / 2j  # shape (degree, dim, dim)
-    cos = vectorized_diag(U_diag + U_diag.conj()) / 2  # shape (degree, dim, dim)
+    # U_diag = jnp.exp(1j * contribution)  # shape (degree, dim)
+    # sin = vectorized_diag(U_diag - U_diag.conj()) / 2j  # shape (degree, dim, dim)
+    # cos = vectorized_diag(U_diag + U_diag.conj()) / 2  # shape (degree, dim, dim)
+    # use shortcut instead:
+    sin = vectorized_diag(jnp.sin(contribution))  # shape (degree, dim, dim)
+    cos = vectorized_diag(jnp.cos(contribution))  # shape (degree, dim, dim)
 
     block_encoding = jnp.concatenate(
         [
@@ -228,7 +230,9 @@ def q_oracle_sketch_boolean(data, dim):
     return diag
 
 
-def q_oracle_sketch_matrix_element(data, dim, nnz):
+def q_oracle_sketch_matrix_element(
+    data, dim, nnz, return_full_block_encoding=False, initial_state=None
+):
     """
     Construct a Hermitian block encoding of
     the sparse element oracle |i>|j> -> A_{ij} |i>|j> from matrix data samples.
@@ -241,8 +245,12 @@ def q_oracle_sketch_matrix_element(data, dim, nnz):
         data: tuple of (sampled_row_indices, sampled_col_indices, sampled_values)
         dim: int, dimension of the target matrix
         nnz: int, number of non-zero elements in the matrix.
+        return_full_block_encoding: bool, whether to return the full block encoding matrix.
+            If False, return only the diagonal of the relevant block.
+
     Returns:
-        a Hermitian block encoding of the sparse element oracle as an array of shape (2, 2, dim**2)
+        If return_full_block_encoding is False, the diagonal of the relevant block of the block encoding as an array of shape (dim**2,)
+        If True, the full block encoding as an array of shape (2, 2, dim**2),
         where the first two dimensions are the ancilla qubit space and the last dimension is the diagonal.
     """
 
@@ -275,14 +283,71 @@ def q_oracle_sketch_matrix_element(data, dim, nnz):
     # since we can implement the c^0U and c^1U† unitaries simultaneously
     # using the same samples.
 
-    U_diag = jnp.exp(1j * phase)
+    # U_diag = jnp.exp(1j * phase)
+    # sin = (U_diag - U_diag.conj()) / (2j)
+    # use shortcut instead:
+    sin = jnp.sin(phase)
 
-    sin = (U_diag - U_diag.conj()) / (2j)
-    cos = (U_diag + U_diag.conj()) / 2
+    if return_full_block_encoding:
+        cos = jnp.cos(phase)
 
-    block_encoding = jnp.stack([sin, cos, cos, -sin], axis=0).reshape(2, 2, dim**2)
+        block_encoding = jnp.stack([sin, cos, cos, -sin], axis=0).reshape(2, 2, dim**2)
 
-    return block_encoding
+        return block_encoding
+
+    else:
+        # return only the diagonal of the relevant block
+        return sin
+
+
+def q_oracle_sketch_matrix_index(data, dim, axis, sparsity, nnz, initial_state):
+    """
+    Construct a block encoding of
+    the sparse row or column index oracle.
+
+    For example, the row index oracle is |i>|k>|0> -> |i>|k>|j(i, k)>,
+    where j(i, k) is the column index of the k-th non-zero element in row i.
+
+    Similarly, the column index oracle is |j>|k>|0> -> |j>|k>|i(j, k)>,
+    where i(j, k) is the row index of the k-th non-zero element in column j.
+
+    Use 1 ancilla qubit.
+
+    Args:
+        data: tuple of (sampled_row_indices, sampled_col_indices, sampled_values)
+        dim: int, dimension of the target matrix along the specified axis
+        axis: int, 0 for row index oracle, 1 for column index oracle
+        sparsity: int, maximum number of non-zero elements per row (axis=0) or column (axis=1).
+        nnz: int, number of non-zero elements in the matrix.
+        initial_state: array of shape (dim**2 * sparsity,), the initial state to apply the oracle on.
+
+    Returns:
+        the output state after applying the oracle, of shape (dim**2 * sparsity,)
+    """
+
+    # if axis == 1, swap row and column indices
+    sampled_row_indices = data[axis]
+    sampled_col_indices = data[1 - axis]
+    num_samples = sampled_row_indices.shape[0]
+
+    # 1. Construct cumulative counter unitary
+    # |i>|k>|l> -> exp( i * theta(i,k,l) ) |i>|k>|l>
+    # theta(i, k, l) = pi / (2s+1) * (|{j: A_{ij} \neq 0, j < l}| - k + 1/2)
+    # using random gates of the form
+    # |i>|k>|l> -> exp( i * pi * nnz / (2s+1) / num_samples * \sum_t 1[i_t=i, j_t<l] ) |i>|k>|l>
+    # note that the -k + 1/2 part can be done separately
+    # and the remaining terms does not depend on k
+
+    phase = jnp.zeros((dim, dim), dtype=real_dtype)
+    phase = phase.at[sampled_row_indices, sampled_col_indices].add(1.0)
+    phase = phase.cumsum(axis=1)  # cumulative count along each row
+    phase = phase.reshape(dim**2)
+
+    t = jnp.pi * nnz / (2 * sparsity + 1)
+    phase = phase * t / num_samples
+
+    # 2. Use LCU to get sin(theta(i,k,l))
+    sin = jnp.sin(phase)
 
 
 """
@@ -354,18 +419,18 @@ def _test_q_state_sketch(key):
     degree = 51
     target_norm = 0.98
     qstate_imperfect = jnp.zeros((degree, N), dtype=complex_dtype)
-    with utils.suppress_stdout_stderr():
-        for i in range(degree):
-            key, subkey = random.split(key)
-            data = data_gen.get_data(subkey, num_samples)
+    # with utils.suppress_stdout_stderr():
+    for i in range(degree):
+        key, subkey = random.split(key)
+        data = data_gen.get_data(subkey, num_samples)
 
-            key, subkey = random.split(key)
-            qstate_imperfect = qstate_imperfect.at[i].set(
-                q_state_sketch(data, N, jnp.linalg.norm(v), subkey)
-            )
-        qstate_aa = primitives.amplitude_amplification(
-            qstate_imperfect, degree=degree, target_norm=target_norm
+        key, subkey = random.split(key)
+        qstate_imperfect = qstate_imperfect.at[i].set(
+            q_state_sketch(data, N, jnp.linalg.norm(v), subkey)
         )
+    qstate_aa = primitives.amplitude_amplification(
+        qstate_imperfect, degree=degree, target_norm=target_norm
+    )
 
     prob_aa = jnp.linalg.norm(qstate_aa) ** 2
     print(
@@ -430,7 +495,9 @@ def _test_q_oracle_sketch_matrix_element(key):
 
     start_time = time.time()
 
-    oracle_diag = q_oracle_sketch_matrix_element(data, N, nnz=nnz)
+    oracle_diag = q_oracle_sketch_matrix_element(
+        data, N, nnz=nnz, return_full_block_encoding=True
+    )
 
     end_time = time.time()
 

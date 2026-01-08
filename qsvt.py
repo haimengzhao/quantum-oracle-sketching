@@ -179,7 +179,7 @@ def get_qsvt_angles_sign(degree, threshold=0.1, rescale=0.9):
     poly = pyqsp.poly.PolySign()
     pcoefs, scale = poly.generate(
         degree=degree,
-        delta=np.ceil(2.0 / threshold),
+        delta=2.0 / threshold,
         ensure_bounded=True,
         return_scale=True,
         chebyshev_basis=True,
