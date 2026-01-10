@@ -16,10 +16,15 @@ def amplitude_amplification(
 
     Implicitly increasing num_ancilla by 1.
 
-    Note that we can safely ingnore the garbage blocks from the block encoding
+    Note that we ingnore the garbage blocks from the block encoding
     that gives us the unnormalized state, since they never enter the relevant
-    subspace for amplitude amplification.
-    We will populate the garbage blocks with the canonical Halmos dilation,
+    subspace for amplitude amplification in quantum oracle sketching + QSVT.
+    This is because quantum oracle sketching and QSVT have a fixed circuit
+    structure and only data are random.
+    This means that the garbage blocks are always equal to the canonical Halmos dilation
+    up to a fixed unitary transformation that does not depend on data, which does
+    not affect the relevant block.
+    Hence, we will populate the garbage blocks with the canonical Halmos dilation,
     which is automatically a Hermitian unitary block encoding.
 
     Args:

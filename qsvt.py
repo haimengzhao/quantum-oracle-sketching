@@ -171,9 +171,9 @@ def get_qsvt_angles_sign(degree, threshold=0.1, rescale=0.9):
         degree: degree of the polynomial approximation
         threshold: equals one when |x| >= threshold
         rescale: scaling factor to ensure the function is bounded within [-1, 1]
+
     Returns:
-        angle_set: array of QSVT angles
-        scale: scaling factor
+        (angle_set, scale): array of QSVT angles and scaling factor
     """
 
     poly = pyqsp.poly.PolySign()
