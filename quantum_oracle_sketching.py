@@ -222,9 +222,7 @@ def q_oracle_sketch_boolean(data, dim):
     return diag
 
 
-def q_oracle_sketch_matrix_element(
-    data, dim, nnz, return_full_block_encoding=False, initial_state=None
-):
+def q_oracle_sketch_matrix_element(data, dims, nnz):
     """
     Construct a Hermitian block encoding of
     the sparse element oracle |i>|j> -> A_{ij} |i>|j> from matrix data samples.
@@ -235,15 +233,11 @@ def q_oracle_sketch_matrix_element(
 
     Args:
         data: tuple of (sampled_row_indices, sampled_col_indices, sampled_values)
-        dim: int, dimension of the target matrix
+        dims: tuple of (int, int), dimensions of the target matrix
         nnz: int, number of non-zero elements in the matrix.
-        return_full_block_encoding: bool, whether to return the full block encoding matrix.
-            If False, return only the diagonal of the relevant block.
 
     Returns:
-        If return_full_block_encoding is False, the diagonal of the relevant block of the block encoding as an array of shape (dim**2,)
-        If True, the full block encoding as an array of shape (2, 2, dim**2),
-        where the first two dimensions are the ancilla qubit space and the last dimension is the diagonal.
+        the diagonal of the relevant block of the block encoding as an array of shape (dims[0]*dims[1],)
     """
 
     t = nnz
@@ -256,13 +250,13 @@ def q_oracle_sketch_matrix_element(
     sampled_values = data[2]
     num_samples = sampled_row_indices.shape[0]
 
-    phase = jnp.zeros((dim, dim), dtype=real_dtype)
+    phase = jnp.zeros((dims[0], dims[1]), dtype=real_dtype)
     phase = phase.at[sampled_row_indices, sampled_col_indices].add(
         jnp.arcsin(sampled_values)
     )
     phase = phase * t / num_samples
 
-    phase = phase.reshape(dim**2)
+    phase = phase.reshape(dims[0] * dims[1])
 
     # 2. construct the block encoding of |i>|j> -> sin(B_{ij}) |i>|j> using LCU
     # we use the circuit S_a X_a H_a (c_a^1 U^\dagger) (c_a^0 U) X_a H_a T_a
@@ -280,16 +274,8 @@ def q_oracle_sketch_matrix_element(
     # use shortcut instead:
     sin = jnp.sin(phase)
 
-    if return_full_block_encoding:
-        cos = jnp.cos(phase)
-
-        block_encoding = jnp.stack([sin, cos, cos, -sin], axis=0).reshape(2, 2, dim**2)
-
-        return block_encoding
-
-    else:
-        # return only the diagonal of the relevant block
-        return sin
+    # return only the diagonal of the relevant block
+    return sin
 
 
 def q_oracle_sketch_matrix_index(data, dim, axis, sparsity, nnz, initial_state):
@@ -500,13 +486,16 @@ def _test_q_oracle_sketch_boolean(key):
 
 def _test_q_oracle_sketch_matrix_element(key):
     # random matrix
-    N = 10000
+    N1 = 1000
+    N2 = 10000
 
-    print(f"Testing matrix with dimension N = {N:.2e}")
-    print(f"Note that the oracle has dimension N^2 x N^2 = {N**2:.2e} x {N**2:.2e}")
+    print(f"Testing matrix with dimension N1 = {N1:.2e}, N2 = {N2:.2e}")
+    print(
+        f"Note that the oracle has dimension (N1*N2) x (N1*N2) = {(N1 * N2):.2e} x {(N1 * N2):.2e}"
+    )
 
     key, subkey = random.split(key)
-    A = random.normal(subkey, (N, N))
+    A = random.normal(subkey, (N1, N2))
     A = A / jnp.linalg.norm(A)
 
     data_gen = matrix_data(A)
@@ -520,44 +509,43 @@ def _test_q_oracle_sketch_matrix_element(key):
 
     start_time = time.time()
 
-    oracle_diag = q_oracle_sketch_matrix_element(
-        data, N, nnz=nnz, return_full_block_encoding=True
-    )
+    oracle_diag = q_oracle_sketch_matrix_element(data, (N1, N2), nnz=nnz)
 
     end_time = time.time()
 
     print(f"Oracle construction time: {end_time - start_time:.3e} seconds")
 
-    if N <= 10:
+    if max(N1, N2) <= 10:
         # only reconstruct the full dense matrix when N is small
-        oracle = jnp.einsum("ijk,kl->iljk", oracle_diag, jnp.eye(N**2)).reshape(
-            2 * N**2, 2 * N**2
-        )
+        oracle = jnp.diag(oracle_diag)
+        oracle = utils.halmos_dilation(oracle)
 
         print(
             "Oracle block encoding unitarity check:",
             jnp.isclose(
-                jnp.linalg.norm(oracle @ oracle.conj().T - jnp.eye(2 * N**2)),
+                jnp.linalg.norm(oracle @ oracle.conj().T - jnp.eye(2 * (N1 * N2))),
                 0,
                 atol=1e-2,
             ),
         )
         assert jnp.isclose(
-            jnp.linalg.norm(oracle @ oracle.conj().T - jnp.eye(2 * N**2)), 0, atol=1e-2
+            jnp.linalg.norm(oracle @ oracle.conj().T - jnp.eye(2 * (N1 * N2))),
+            0,
+            atol=1e-2,
         )
 
         print(
             "Oracle block encoding Hermiticity check:",
-            jnp.linalg.norm(oracle - oracle.conj().T),
+            jnp.isclose(jnp.linalg.norm(oracle - oracle.conj().T), 0, atol=1e-2),
         )
 
         assert jnp.isclose(jnp.linalg.norm(oracle - oracle.conj().T), 0, atol=1e-2)
     else:
         print("Skipping unitarity and Hermiticity checks for large N.")
 
-    A_reconst = oracle_diag[0, 0]
+    A_reconst = oracle_diag
 
-    error = jnp.max(jnp.abs(A_reconst - A.reshape(N**2)))
+    error = jnp.max(jnp.abs(A_reconst - A.reshape(N1 * N2)))
     print(f"Matrix reconstruction error in operator norm: {error:.3e}")
 
     assert jnp.isclose(error, 0, atol=1e-1)
