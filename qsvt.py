@@ -238,6 +238,37 @@ def apply_qsvt(U, num_ancilla, angle_set):
     return circ
 
 
+apply_qsvt_vectorized = jax.vmap(apply_qsvt, in_axes=(0, None, None))
+
+
+def apply_qsvt_diag(U, num_ancilla, angle_set):
+    """
+    Apply QSVT to a Hermitian unitary U that block encodes some matrix using the given angles.
+
+    Efficient implementation when U is of the form
+        [[ D_1, D_2 ],
+        [ D_2^dagger, D_3 ]],
+        where D_1, D_2, D_3 are diagonal matrices.
+        Assumes U is given as an array of shape (2^num_ancilla, 2^num_ancilla, dim)
+
+    Args:
+        U: a Hermitian unitary with diagonal blocks, shape (2^num_ancilla, 2^num_ancilla, dim)
+        num_ancilla: number of ancilla qubits in U
+        angle_set: array of QSVT angles
+
+    Returns:
+        V: unitary of the QSVT circuit, shape (2^num_ancilla, 2^num_ancilla, dim)
+    """
+
+    # exploit the direct sum structure of QSVT for efficient implementation
+    U = U.transpose((2, 0, 1))  # shape (dim, 2^num_ancilla, 2^num_ancilla)
+    U = apply_qsvt_vectorized(
+        U, num_ancilla, angle_set
+    )  # shape (dim, 2^num_ancilla, 2^num_ancilla)
+    U = U.transpose((1, 2, 0))  # shape (2^num_ancilla, 2^num_ancilla, dim)
+    return U
+
+
 @partial(jax.jit, static_argnums=(1,))
 def apply_qsvt_imperfect(U_sequence, num_ancilla, angle_set):
     """
@@ -274,6 +305,41 @@ def apply_qsvt_imperfect(U_sequence, num_ancilla, angle_set):
         circ = circ @ U * jnp.exp(1j * angle * qsp_op_phase_pattern)[None, :]
 
     return circ
+
+
+apply_qsvt_imperfect_vectorized = jax.vmap(
+    apply_qsvt_imperfect, in_axes=(0, None, None)
+)
+
+
+def apply_qsvt_imperfect_diag(U_sequence, num_ancilla, angle_set):
+    """
+    Apply QSVT to a sequence of imperfect implementation of a Hermitian unitary U that block encodes some matrix using the given angles.
+
+    Efficient implementation when U is of the form
+        [[ D_1, D_2 ],
+        [ D_2^dagger, D_3 ]],
+        where D_1, D_2, D_3 are diagonal matrices.
+        Assumes U_sequence is given as an array of shape (num_gates, 2^num_ancilla, 2^num_ancilla, dim)
+
+    Args:
+        U_sequence: a sequence of imperfect implementations of a Hermitian unitary, shape (num_gates, 2^num_ancilla, 2^num_ancilla, dim)
+        num_ancilla: number of ancilla qubits in U
+        angle_set: array of QSVT angles, shape (num_gates+1,)
+
+    Returns:
+        V: unitary of the QSVT circuit
+    """
+
+    # exploit the direct sum structure of QSVT for efficient implementation
+    U_sequence = U_sequence.transpose(
+        (3, 0, 1, 2)
+    )  # shape (dim, num_gates, 2^num_ancilla, 2^num_ancilla)
+    U = apply_qsvt_imperfect_vectorized(
+        U_sequence, num_ancilla, angle_set
+    )  # shape (dim, 2^num_ancilla, 2^num_ancilla)
+    U = U.transpose((1, 2, 0))  # shape (2^num_ancilla, 2^num_ancilla, dim)
+    return U
 
 
 """
@@ -321,6 +387,97 @@ def _test_qsvt(func):
     )
 
     assert jnp.allclose(eigvals_qsvt, eigvals_target, atol=1e-4)
+
+
+def _test_qsvt_diag(func):
+    dim = 100
+    polydeg = 10
+    rescale = 0.9
+
+    def scaled_func(x):
+        return rescale * func(x)
+
+    angle_set = get_qsvt_angles(
+        func=func,
+        degree=polydeg,
+        rescale=rescale,
+    )
+
+    print("QSVT angle set length:", angle_set.shape[0])
+
+    key = random.PRNGKey(0)
+    key, subkey = random.split(key)
+    phase = random.uniform(subkey, minval=0.0, maxval=2 * jnp.pi, shape=(dim,))
+    sin = jnp.sin(phase)
+    cos = jnp.cos(phase)
+    V = jnp.array([[sin, cos], [cos, -sin]]).reshape(2, 2, dim)  # shape (2, 2, dim)
+
+    start_time = time.time()
+    V_qsvt = apply_qsvt_diag(V, num_ancilla=1, angle_set=angle_set)
+    end_time = time.time()
+    print(f"Time for QSVT application: {end_time - start_time:.3e} seconds")
+
+    A_qsvt = V_qsvt[0, 0]
+    A_qsvt = jnp.real(A_qsvt)
+
+    # test QSVT approximation
+    eigvals = sin
+    eigvals_qsvt = A_qsvt
+
+    eigvals_target = scaled_func(eigvals)
+
+    print(
+        f"QSVT approximation error: {jnp.max(jnp.abs(eigvals_qsvt - eigvals_target)):.3e}"
+    )
+
+    assert jnp.allclose(eigvals_qsvt, eigvals_target, atol=1e-4)
+
+    # imperfect version
+    noise_level = 0.0001
+    print(f"Testing imperfect diag QSVT with noise level: {noise_level:.3e}")
+
+    # generate imperfect implementations of U with noisy phases
+    num_gates = angle_set.shape[0] - 1
+    V_sequence = []
+    for i in range(num_gates):
+        key, subkey = random.split(key)
+        noise = random.normal(subkey, (phase.shape[0],)) * noise_level
+        noisy_phase = noise + phase
+        sin_noisy = jnp.sin(noisy_phase)
+        cos_noisy = jnp.cos(noisy_phase)
+        U_noisy = jnp.array([[sin_noisy, cos_noisy], [cos_noisy, -sin_noisy]]).reshape(
+            2, 2, dim
+        )  # shape (2, 2, dim)
+        V_sequence.append(U_noisy)
+
+    V_sequence = jnp.stack(V_sequence, axis=0)
+
+    start_time = time.time()
+    V_qsvt = apply_qsvt_imperfect_diag(V_sequence, num_ancilla=1, angle_set=angle_set)
+    end_time = time.time()
+    print(f"Time for imperfect QSVT application: {end_time - start_time:.3e} seconds")
+
+    A_qsvt = V_qsvt[0, 0]
+    A_qsvt = jnp.real(A_qsvt)
+
+    # test QSVT approximation
+    eigvals = sin
+    eigvals_qsvt = A_qsvt
+
+    eigvals_target = scaled_func(eigvals)
+
+    print(
+        f"Imperfect QSVT approximation error: {jnp.max(jnp.abs(eigvals_qsvt - eigvals_target)):.3e}",
+    )
+
+    print(
+        f"Imperfect QSVT approximation relative error: {jnp.max(jnp.abs(eigvals_qsvt - eigvals_target)) / noise_level:.3e}",
+    )
+
+    assert (
+        jnp.max(jnp.abs(eigvals_qsvt - eigvals_target)) / noise_level < 5.0
+        or jnp.max(jnp.abs(eigvals_qsvt - eigvals_target)) < 1e-5
+    )
 
 
 def _test_qsvt_imperfect(func, noise_level=0.001):
@@ -491,6 +648,10 @@ if __name__ == "__main__":
     print("---" * 10)
     print("Testing even function...")
     _test_qsvt(func_even)
+
+    print("---" * 10)
+    print("Testing diag qsvt...")
+    _test_qsvt_diag(func_even)
 
     print("---" * 10)
     print("Testing imperfect QSVT...")

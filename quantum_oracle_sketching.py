@@ -12,8 +12,6 @@ from data_generation import boolean_data, matrix_data, vector_data
 complex_dtype = jnp.complex128
 real_dtype = jnp.float64
 
-vectorized_diag = jax.vmap(jnp.diag)
-
 
 def q_state_sketch_flat_unitary(data, dim):
     """
@@ -169,21 +167,18 @@ def q_state_sketch(data, dim, norm, key, degree=4):
     # sin = vectorized_diag(U_diag - U_diag.conj()) / 2j  # shape (degree, dim, dim)
     # cos = vectorized_diag(U_diag + U_diag.conj()) / 2  # shape (degree, dim, dim)
     # use shortcut instead:
-    sin = vectorized_diag(jnp.sin(contribution))  # shape (degree, dim, dim)
-    cos = vectorized_diag(jnp.cos(contribution))  # shape (degree, dim, dim)
+    sin = jnp.sin(contribution)  # shape (degree, dim)
+    cos = jnp.cos(contribution)  # shape (degree, dim)
 
-    block_encoding = jnp.concatenate(
-        [
-            jnp.concatenate([sin, cos], axis=1),
-            jnp.concatenate([cos, -sin], axis=1),
-        ],
-        axis=2,
-    )  # shape (degree, 2*dim, 2*dim)
+    block_encoding = jnp.stack([sin, cos, cos, -sin], axis=0).reshape(
+        2, 2, degree, dim
+    )  # shape (2, 2, degree, dim)
+    block_encoding = block_encoding.transpose(2, 0, 1, 3)  # shape (degree, 2, 2, dim)
 
     # 6. Apply QSVT to approximate arcsin(x)
-    block_encoding = qsvt.apply_qsvt_imperfect(
+    block_encoding = qsvt.apply_qsvt_imperfect_diag(
         block_encoding[:-1], num_ancilla=1, angle_set=angle_set
-    )  # shape (2*dim, 2*dim)
+    )  # shape (2, 2, dim)
 
     # 7. Prepare the state
     # apply the block encoding to the all plus state
@@ -193,10 +188,7 @@ def q_state_sketch(data, dim, norm, key, degree=4):
     # since we can implement the c^0U and c^1U† unitaries simultaneously
     # using the same samples.
 
-    state = jnp.sum(
-        (block_encoding[:dim, :dim] + block_encoding[:dim, :dim].conj().T) / 2,
-        axis=1,
-    ) / jnp.sqrt(dim)
+    state = jnp.real(block_encoding[0, 0]) / jnp.sqrt(dim)
 
     # 8. Apply inverse randomized Hadamard transform to restore the original vector
     hadamard = utils.unnormalized_hadamard_transform(int(jnp.round(jnp.log2(dim))))
@@ -315,7 +307,7 @@ def q_oracle_sketch_matrix_index(data, dim, axis, sparsity, nnz, initial_state):
 
     Args:
         data: tuple of (sampled_row_indices, sampled_col_indices, sampled_values)
-        dim: int, dimension of the target matrix along the specified axis
+        dim: int, dimension of the target matrix along the specified axis, must be a power of 2
         axis: int, 0 for row index oracle, 1 for column index oracle
         sparsity: int, maximum number of non-zero elements per row (axis=0) or column (axis=1).
         nnz: int, number of non-zero elements in the matrix.
@@ -341,13 +333,46 @@ def q_oracle_sketch_matrix_index(data, dim, axis, sparsity, nnz, initial_state):
     phase = jnp.zeros((dim, dim), dtype=real_dtype)
     phase = phase.at[sampled_row_indices, sampled_col_indices].add(1.0)
     phase = phase.cumsum(axis=1)  # cumulative count along each row
-    phase = phase.reshape(dim**2)
+
+    # expand to include sparsity index k
+    phase = jnp.repeat(
+        phase[:, None, :], sparsity, axis=1
+    )  # shape (dim, sparsity, dim)
+
+    # - k + 1/2
+    k_indices = jnp.arange(sparsity, dtype=real_dtype)  # shape (sparsity,)
+    phase = phase - k_indices[None, :, None] + 0.5  # shape (dim, sparsity, dim)
 
     t = jnp.pi * nnz / (2 * sparsity + 1)
     phase = phase * t / num_samples
 
+    phase = phase.reshape(dim * sparsity * dim)  # shape (dim * sparsity * dim,)
+
     # 2. Use LCU to get sin(theta(i,k,l))
-    sin = jnp.sin(phase)
+    sin = jnp.diag(jnp.sin(phase))  # shape (dim * sparsity * dim, dim * sparsity * dim)
+    cos = jnp.diag(jnp.cos(phase))  # shape (dim * sparsity * dim, dim * sparsity * dim)
+
+    # 3. Apply the sign function using QSVT
+    # to get the phase cumulative counter oracle |i>|k>|l> -> (-1)^{ 1[C(i, l) < k] } |i>|k>|l>
+    threshold = jnp.pi / (4 * sparsity + 2)
+    degree = 51
+    angle_set, scale = qsvt.get_qsvt_angles_sign(
+        degree=degree, threshold=threshold, rescale=0.98
+    )
+
+    block_encoding = jnp.stack([sin, cos, cos, -sin], axis=0).reshape(
+        2, 2, dim * sparsity * dim
+    )  # shape (2, 2, dim * sparsity * dim)
+    block_encoding = qsvt.apply_qsvt_diag(
+        block_encoding, num_ancilla=1, angle_set=angle_set
+    )  # shape (2, 2, dim * sparsity * dim)
+    # obtain the phase oracle |i>|k>|l> -> (-1)^{ 1[C(i, l) < k] } |i>|k>|l>
+    block_encoding = block_encoding[0, 0]
+
+    # 4. Construct the index oracle
+    num_iter = int(jnp.ceil(jnp.log2(dim)))
+    for i in range(num_iter):
+        pass
 
 
 """
