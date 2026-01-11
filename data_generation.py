@@ -24,7 +24,19 @@ class matrix_data:
         self.num_generated_samples = 0
 
     def get_matrix_element_data(self, key, num_samples):
-        # uniform random samples of non-zero matrix elements
+        """
+        Get uniform random samples of non-zero matrix elements.
+
+        Args:
+            key: jax.random.PRNGKey, the random key.
+            num_samples: int, number of samples to generate.
+
+        Returns:
+            sampled_rows: array of shape (num_samples,), the row indices of the sampled elements.
+            sampled_cols: array of shape (num_samples,), the column indices of the sampled elements.
+            sampled_values: array of shape (num_samples,), the values of the sampled elements.
+        """
+
         rows, cols = jnp.nonzero(self.matrix)
         indices = jnp.arange(len(rows))
         sampled_indices = random.choice(
@@ -39,16 +51,26 @@ class matrix_data:
         return sampled_rows, sampled_cols, sampled_values
 
     def get_row_data(self, key, num_samples):
-        # uniform random samples of rows
+        """
+        Get uniform random samples of rows of the matrix.
+
+        Args:
+            key: jax.random.PRNGKey, the random key.
+            num_samples: int, number of samples to generate.
+
+        Returns:
+            sampled_rows: array of shape (num_samples,), the row indices of the sampled rows.
+            sampled_row_vectors: array of shape (num_samples, self.shape[1]), the sampled row vectors.
+        """
         num_rows = self.shape[0]
         sampled_rows = random.choice(
             key, jnp.arange(num_rows), shape=(num_samples,), replace=True
         )
-        sampled_values = self.matrix[sampled_rows]
+        sampled_row_vectors = self.matrix[sampled_rows]
 
         self.num_generated_samples += num_samples
 
-        return sampled_rows, sampled_values
+        return sampled_rows, sampled_row_vectors
 
 
 class vector_data:
@@ -71,7 +93,18 @@ class vector_data:
         self.num_generated_samples = 0
 
     def get_data(self, key, num_samples):
-        # uniform random components of the vector
+        """
+        Get uniform random samples of components of the vector.
+
+        Args:
+            key: jax.random.PRNGKey, the random key.
+            num_samples: int, number of samples to generate.
+
+        Returns:
+            sampled_indices: array of shape (num_samples,), the indices of the sampled components.
+            sampled_values: array of shape (num_samples,), the values of the sampled components.
+        """
+
         sampled_indices = random.choice(
             key, jnp.arange(self.length), shape=(num_samples,), replace=True
         )
@@ -102,7 +135,17 @@ class boolean_data:
         self.num_generated_samples = 0
 
     def get_data(self, key, num_samples):
-        # uniform random queries
+        """
+        Get uniform random samples of queries to the boolean function.
+
+        Args:
+            key: jax.random.PRNGKey, the random key.
+            num_samples: int, number of samples to generate.
+
+        Returns:
+            sampled_indices: array of shape (num_samples,), the indices of the sampled queries.
+            sampled_values: array of shape (num_samples,), the values of the sampled queries.
+        """
         sampled_indices = random.choice(
             key, jnp.arange(self.length), shape=(num_samples,), replace=True
         )

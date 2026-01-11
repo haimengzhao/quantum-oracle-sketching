@@ -5,6 +5,11 @@ import jax
 import jax.numpy as jnp
 from jax import random
 
+complex_dtype = jnp.complex128
+real_dtype = jnp.float64
+
+jax.config.update("jax_enable_x64", True)
+
 
 @contextmanager
 def suppress_stdout_stderr():

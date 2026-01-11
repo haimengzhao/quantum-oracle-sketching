@@ -10,8 +10,7 @@ from pyqsp import angle_sequence
 from pyqsp.poly import PolyGenerator
 
 import utils
-
-jax.config.update("jax_enable_x64", True)
+from utils import complex_dtype, real_dtype
 
 
 class PolyTaylorSeries(PolyGenerator):
@@ -148,6 +147,7 @@ def get_qsvt_angles_inverse(kappa, epsilon=0.1):
         chebyshev_basis=True,
     )
 
+    pcoefs = np.asarray(pcoefs, dtype=np.float64)
     (phi_set, red_phiset, parity) = angle_sequence.QuantumSignalProcessingPhases(
         pcoefs, method="sym_qsp", chebyshev_basis=True
     )
@@ -186,6 +186,7 @@ def get_qsvt_angles_sign(degree, threshold=0.1, rescale=0.9):
         max_scale=rescale,
     )
 
+    pcoefs = np.asarray(pcoefs, dtype=np.float64)
     (phi_set, red_phiset, parity) = angle_sequence.QuantumSignalProcessingPhases(
         pcoefs, method="sym_qsp", chebyshev_basis=True
     )
@@ -201,7 +202,7 @@ def get_qsvt_angles_sign(degree, threshold=0.1, rescale=0.9):
     return angle_set, scale
 
 
-@partial(jax.jit, static_argnums=(1,))
+# @partial(jax.jit, static_argnums=(1,))
 def apply_qsvt(U, num_ancilla, angle_set):
     """
     Apply QSVT to a Hermitian unitary U that block encodes some matrix using the given angles.
@@ -269,7 +270,7 @@ def apply_qsvt_diag(U, num_ancilla, angle_set):
     return U
 
 
-@partial(jax.jit, static_argnums=(1,))
+# @partial(jax.jit, static_argnums=(1,))
 def apply_qsvt_imperfect(U_sequence, num_ancilla, angle_set):
     """
     Apply QSVT to a sequence of imperfect implementation of a Hermitian unitary U that block encodes some matrix using the given angles.
