@@ -398,45 +398,29 @@ def q_oracle_sketch_matrix_index(data, dims, axis, sparsity, nnz):
     state_lo = jnp.tile(
         state_lo, (num_rows, sparsity, 1, 1)
     )  # shape (num_rows, sparsity, num_cols, 2)
-    for t in range(bitlength_col):
-        # print("Binary search step:", t + 1, "/", bitlength_col)
 
+    for bit in range(bitlength_col - 1, -1, -1):  # MSB-first (bit is LSB index)
         # SWAP_{l_t, o} X_{l_t} O X_{l_t}
 
-        # a. Flip l_t (X on bit t of l)
-        bit = bitlength_col - 1 - t  # MSB-first
-        mask = 1 << bit
-        perm = jnp.arange(num_cols) ^ mask
-        state_lo = state_lo[:, :, perm, :]  # shape (num_rows, sparsity, num_cols, 2)
+        high = 1 << (bitlength_col - bit - 1)
+        low = 1 << bit
 
-        # b. Apply XOR oracle
-        state_lo = jnp.einsum(
-            "ijklm,ijkm->ijkl",
-            xor_oracle,
-            state_lo,
-        )  # shape (num_rows, sparsity, num_cols, 2)
+        # a. X_{l_t}
+        state_lo = state_lo.reshape(num_rows, sparsity, high, 2, low, 2)
+        state_lo = state_lo[:, :, :, ::-1, :, :]
+        state_lo = state_lo.reshape(num_rows, sparsity, num_cols, 2)
 
-        # c. Flip l_t back
-        state_lo = state_lo[:, :, perm, :]  # shape (num_rows, sparsity, num_cols, 2)
+        # b. O
+        state_lo = jnp.matvec(xor_oracle, state_lo)
+
+        # c. X_{l_t}
+        state_lo = state_lo.reshape(num_rows, sparsity, high, 2, low, 2)
+        state_lo = state_lo[:, :, :, ::-1, :, :]
+        state_lo = state_lo.reshape(num_rows, sparsity, num_cols, 2)
 
         # d. SWAP_{l_t, o}
-        bit = bitlength_col - 1 - t  # same bit index as above (MSB-first)
-        mask = 1 << bit
-
-        lo = jnp.arange(num_cols * 2)
-        l = lo // 2
-        o = lo % 2
-        b = (l >> bit) & 1  # old l_t
-
-        l_base = l & ~mask
-        l_new = jnp.where(o == 0, l_base, l_base | mask)  # set l_t <- o
-        o_new = b  # set o <- old l_t
-        new = l_new * 2 + o_new
-
-        perm = jnp.empty_like(lo).at[new].set(lo)
-
-        state_lo = state_lo.reshape(num_rows, sparsity, num_cols * 2)
-        state_lo = state_lo[:, :, perm]
+        state_lo = state_lo.reshape(num_rows, sparsity, high, 2, low, 2)
+        state_lo = state_lo.transpose(0, 1, 2, 5, 4, 3)
         state_lo = state_lo.reshape(num_rows, sparsity, num_cols, 2)
 
     # final state
