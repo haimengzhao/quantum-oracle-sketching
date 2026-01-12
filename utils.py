@@ -5,8 +5,8 @@ import jax
 import jax.numpy as jnp
 from jax import random
 
-complex_dtype = jnp.complex128
-real_dtype = jnp.float64
+complex_dtype = jnp.complex64
+real_dtype = jnp.float32
 int_dtype = jnp.int32
 
 jax.config.update("jax_enable_x64", True)
@@ -21,7 +21,7 @@ def suppress_stdout_stderr():
 
 
 def unnormalized_hadamard_transform(n):
-    H = jnp.array([[1.0, 1.0], [1.0, -1.0]])
+    H = jnp.array([[1.0, 1.0], [1.0, -1.0]], dtype=real_dtype)
     H_n = H
     for _ in range(n - 1):
         H_n = jnp.kron(H_n, H)
@@ -30,7 +30,9 @@ def unnormalized_hadamard_transform(n):
 
 def generate_random_unitary(key, dim):
     """Generate a random unitary matrix of size n x n."""
-    A = random.normal(key, (dim, dim)) + 1j * random.normal(key, (dim, dim))
+    A = random.normal(key, (dim, dim), dtype=complex_dtype) + 1j * random.normal(
+        key, (dim, dim), dtype=complex_dtype
+    )
     Q, R = jnp.linalg.qr(A)
     D = jnp.diag(jnp.diag(R) / jnp.abs(jnp.diag(R)))
     return jnp.dot(Q, D)
@@ -48,7 +50,9 @@ def get_block_encoded(U, num_ancilla=1):
 
 def generate_random_hermitian(key, dim):
     """Generate a random Hermitian matrix of size n x n with norm bounded by one."""
-    A = random.normal(key, (dim, dim)) + 1j * random.normal(key, (dim, dim))
+    A = random.normal(key, (dim, dim), dtype=complex_dtype) + 1j * random.normal(
+        key, (dim, dim), dtype=complex_dtype
+    )
     A = (A + A.conj().T) / 2
     # Normalize the matrix to have norm bounded by 1
     norm = jnp.linalg.norm(A, ord=2)
@@ -100,9 +104,9 @@ def hermitian_block_encoding(U):
     For example, in taking the real part of a block encoding,
     or in constructing sin and cos block encodings from phase oracles.
     """
-    hadamard = jnp.array([[1, 1], [1, -1]]) / jnp.sqrt(2)
-    zero_to_one = hadamard @ jnp.array([[0, 0], [1, 0]]) @ hadamard
-    one_to_zero = hadamard @ jnp.array([[0, 1], [0, 0]]) @ hadamard
+    hadamard = jnp.array([[1, 1], [1, -1]], dtype=real_dtype) / jnp.sqrt(2)
+    zero_to_one = hadamard @ jnp.array([[0, 0], [1, 0]], dtype=real_dtype) @ hadamard
+    one_to_zero = hadamard @ jnp.array([[0, 1], [0, 0]], dtype=real_dtype) @ hadamard
     V = jnp.kron(zero_to_one, U) + jnp.kron(one_to_zero, U.conj().T)
     return V
 

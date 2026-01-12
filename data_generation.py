@@ -1,12 +1,12 @@
 import jax.numpy as jnp
 from jax import random
 
-from utils import int_dtype
+from utils import complex_dtype, int_dtype, real_dtype
 
 
 class matrix_data:
     """
-    Class to simulate access to a matrix via sampling its non-zero elements or rows uniformly randomly.
+    Class to simulate access to a real matrix via sampling its non-zero elements or rows uniformly randomly.
 
     Attributes:
         matrix: array of shape (dim1, dim2), the matrix to sample from.
@@ -21,7 +21,7 @@ class matrix_data:
     """
 
     def __init__(self, matrix):
-        self.matrix = matrix
+        self.matrix = matrix.astype(real_dtype)
         self.shape = matrix.shape
         self.num_generated_samples = jnp.int64(0)
         self._nz_rows, self._nz_cols = jnp.nonzero(self.matrix)
@@ -86,7 +86,7 @@ class matrix_data:
 
 class vector_data:
     """
-    Class to simulate access to a vector via sampling its components uniformly randomly.
+    Class to simulate access to a real vector via sampling its components uniformly randomly.
 
     Attributes:
         vector: array of shape (dim,), the vector to sample from.
@@ -99,7 +99,7 @@ class vector_data:
     """
 
     def __init__(self, vector):
-        self.vector = vector
+        self.vector = vector.astype(real_dtype)
         self.length = vector.shape[0]
         self.num_generated_samples = jnp.int64(0)
 
@@ -121,7 +121,7 @@ class vector_data:
             jnp.arange(self.length, dtype=int_dtype),
             shape=(num_samples,),
             replace=True,
-        )
+        ).astype(int_dtype)
         sampled_values = self.vector[sampled_indices]
 
         self.num_generated_samples += num_samples
@@ -144,7 +144,7 @@ class boolean_data:
     """
 
     def __init__(self, truth_table):
-        self.truth_table = truth_table
+        self.truth_table = truth_table.astype(int_dtype)
         self.length = truth_table.shape[0]
         self.num_generated_samples = jnp.int64(0)
 
@@ -165,7 +165,7 @@ class boolean_data:
             jnp.arange(self.length, dtype=int_dtype),
             shape=(num_samples,),
             replace=True,
-        )
+        ).astype(int_dtype)
         sampled_values = self.truth_table[sampled_indices]
 
         self.num_generated_samples += num_samples

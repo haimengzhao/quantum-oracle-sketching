@@ -334,7 +334,7 @@ def q_oracle_sketch_matrix_index(
         # |i>|k>|l> -> exp( i * pi * nnz / (2s+1) / num_samples * \sum_t 1[i_t=i, j_t<l] ) |i>|k>|l>
         # note that the -k + 1/2 part can be done separately
         # and the remaining terms does not depend on k
-        phase = jnp.zeros((num_rows, num_cols), dtype=int_dtype)
+        phase = jnp.zeros((num_rows, num_cols), dtype=real_dtype)
         sampled_indices = random.randint(
             sample_key,
             shape=(unit_sample_size,),
@@ -381,6 +381,7 @@ def q_oracle_sketch_matrix_index(
     angle_set, scale = qsvt.get_qsvt_angles_sign(
         degree=degree, threshold=threshold, rescale=0.99
     )
+    angle_set = angle_set.astype(real_dtype)
 
     hadamard = jnp.array([[1, 1], [1, -1]], dtype=real_dtype) / jnp.sqrt(2)
     print("QSVT sign function threshold:", threshold)
@@ -393,32 +394,33 @@ def q_oracle_sketch_matrix_index(
         state_lo, (num_rows, sparsity, 1, 1)
     )  # shape (num_rows, sparsity, num_cols, 2)
 
-    for bit in tqdm(range(bitlength_col - 1, -1, -1)):  # MSB-first (bit is LSB index)
-        # 2. Use LCU to get sin(theta(i,k,l))
-        def _gate_step(carry, _):
-            gate_key = carry
-            gate_key, subkey = random.split(gate_key)
-            phase = _assemble_block_encoding_streamed(subkey)
-            return gate_key, (jnp.sin(phase), jnp.cos(phase))
+    dim = num_rows * sparsity * num_cols
+    qsp_mask = jnp.array([1.0, -1.0], dtype=angle_set.dtype)
+    phase0 = jnp.exp(1j * angle_set[0] * qsp_mask)
+    global_phase = jnp.exp(1j * (-jnp.pi / 2) * angle_set.shape[0])
 
-        key, (sin, cos) = jax.lax.scan(_gate_step, key, None, length=degree)
+    for bit in tqdm(range(bitlength_col - 1, -1, -1)):  # MSB-first (bit is LSB index)
+        # 2-3. Stream QSVT to avoid storing all degree gates.
+        qsvt_circ = global_phase * jnp.diag(phase0)
+        qsvt_circ = jnp.broadcast_to(qsvt_circ[:, :, None], (2, 2, dim))
+
+        for m in range(degree):
+            key, subkey = random.split(key)
+            phase = _assemble_block_encoding_streamed(subkey)
+            sin = jnp.sin(phase)
+            cos = jnp.cos(phase)
+            u_gate = jnp.stack(
+                [jnp.stack([sin, cos], axis=0), jnp.stack([cos, -sin], axis=0)],
+                axis=0,
+            )  # shape (2, 2, dim)
+            qsvt_circ = jnp.einsum("abm,bcm->acm", qsvt_circ, u_gate)
+            phase_rot = jnp.exp(1j * angle_set[m + 1] * qsp_mask)
+            qsvt_circ = qsvt_circ * phase_rot[None, :, None]
+
         data_gen.num_generated_samples += unit_sample_size * degree
 
-        # 3. Apply the sign function using QSVT
-        # to get the phase cumulative counter oracle |i>|k>|l> -> (-1)^{ 1[C(i, l) < k] } |i>|k>|l>
-        block_encoding = jnp.stack([sin, cos, cos, -sin], axis=0).reshape(
-            2, 2, degree, num_rows * sparsity * num_cols
-        )  # shape (2, 2, degree, num_rows * sparsity * num_cols)
-        block_encoding = block_encoding.transpose(
-            2, 0, 1, 3
-        )  # shape (degree, 2, 2, num_rows * sparsity * num_cols)
-        block_encoding = qsvt.apply_qsvt_imperfect_diag(
-            block_encoding, num_ancilla=1, angle_set=angle_set
-        )  # shape (2, 2, num_rows * sparsity * num_cols)
         # obtain the phase oracle |i>|k>|l> -> (-1)^{ 1[C(i, l) < k] } |i>|k>|l>
-        block_encoding = jnp.real(
-            block_encoding[0, 0]
-        )  # shape (num_rows * sparsity * num_cols,)
+        block_encoding = jnp.real(qsvt_circ[0, 0])  # shape (dim,)
         block_encoding = block_encoding.reshape(
             num_rows, sparsity, num_cols
         )  # shape (num_rows, sparsity, num_cols)
@@ -559,7 +561,7 @@ def _test_q_state_sketch_flat(key):
 
     print(f"Testing vector with dimension N = {N:.2e}")
 
-    x = random.randint(key, (N,), minval=0, maxval=2) * 2 - 1
+    x = random.randint(key, (N,), minval=0, maxval=2, dtype=int_dtype) * 2 - 1
 
     vec_data = vector_data(x)
 
@@ -592,7 +594,7 @@ def _test_q_state_sketch(key):
     print(f"Testing general vector with dimension N = {N}")
 
     key, subkey = random.split(key)
-    v = random.normal(subkey, (N,))
+    v = random.normal(subkey, (N,), dtype=real_dtype)
     v = v / jnp.linalg.norm(v)
 
     data_gen = vector_data(v)
@@ -651,7 +653,7 @@ def _test_q_oracle_sketch_boolean(key):
 
     print(f"Testing boolean function with dimension N = {N:.2e}")
 
-    f = random.randint(key, (N,), minval=0, maxval=2)
+    f = random.randint(key, (N,), minval=0, maxval=2, dtype=int_dtype)
 
     bool_data = boolean_data(f)
 
@@ -684,7 +686,7 @@ def _test_q_oracle_sketch_matrix_element(key):
     )
 
     key, subkey = random.split(key)
-    A = random.normal(subkey, (N1, N2))
+    A = random.normal(subkey, (N1, N2), dtype=real_dtype)
     A = A / jnp.linalg.norm(A)
 
     data_gen = matrix_data(A)
@@ -742,19 +744,19 @@ def _test_q_oracle_sketch_matrix_element(key):
 
 def _test_q_oracle_sketch_matrix_index(key):
     # random sparse matrix
-    dim1 = 100
-    dim2 = 100
+    dim1 = 1000
+    dim2 = 1000
     nnz = dim1 * 3
     num_samples = int(1e7)
 
     print(f"Testing sparse matrix with dimension {dim1} x {dim2}, nnz = {nnz}")
 
     key, subkey = random.split(key)
-    row_indices = random.randint(subkey, (nnz,), 0, dim1)
+    row_indices = random.randint(subkey, (nnz,), 0, dim1, dtype=int_dtype)
     key, subkey = random.split(key)
-    col_indices = random.randint(subkey, (nnz,), 0, dim2)
+    col_indices = random.randint(subkey, (nnz,), 0, dim2, dtype=int_dtype)
     key, subkey = random.split(key)
-    values = random.normal(subkey, (nnz,))
+    values = random.normal(subkey, (nnz,), dtype=real_dtype)
 
     A = jnp.zeros((dim1, dim2)).at[row_indices, col_indices].set(values)
     nnz = jnp.count_nonzero(A)
@@ -809,12 +811,11 @@ def _test_q_oracle_sketch_matrix_row_index(key):
     print(f"Testing sparse matrix with dimension {dim1} x {dim2}, nnz = {nnz}")
 
     key, subkey = random.split(key)
-    row_indices = random.randint(subkey, (nnz,), 0, dim1)
+    row_indices = random.randint(subkey, (nnz,), 0, dim1, dtype=int_dtype)
     key, subkey = random.split(key)
-    col_indices = random.randint(subkey, (nnz,), 0, dim2)
+    col_indices = random.randint(subkey, (nnz,), 0, dim2, dtype=int_dtype)
     key, subkey = random.split(key)
-    values = random.normal(subkey, (nnz,))
-
+    values = random.normal(subkey, (nnz,), dtype=real_dtype)
     A = jnp.zeros((dim1, dim2)).at[row_indices, col_indices].set(values)
     nnz = jnp.count_nonzero(A)
     row_counts = jnp.sum(A != 0, axis=1)

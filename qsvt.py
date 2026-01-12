@@ -221,7 +221,7 @@ def apply_qsvt(U, num_ancilla, angle_set):
 
     # diagonal phase signs of the QSP operator, angle not multiplied yet
     mask = jnp.concatenate([jnp.array([1.0]), -jnp.ones((2**num_ancilla) - 1)])
-    qsp_op_phase_pattern = jnp.repeat(mask, dim)
+    qsp_op_phase_pattern = jnp.repeat(mask, dim).astype(real_dtype)
 
     # apply QSP rotations and unitaries
     # Eq. (12) in https://arxiv.org/pdf/2002.11649
@@ -293,7 +293,7 @@ def apply_qsvt_imperfect(U_sequence, num_ancilla, angle_set):
 
     # diagonal phase signs of the QSP operator, angle not multiplied yet
     mask = jnp.concatenate([jnp.array([1.0]), -jnp.ones((2**num_ancilla) - 1)])
-    qsp_op_phase_pattern = jnp.repeat(mask, dim)
+    qsp_op_phase_pattern = jnp.repeat(mask, dim).astype(real_dtype)
 
     circ = jnp.exp(1j * (-jnp.pi / 2) * (angle_set.shape[0])) * jnp.diag(
         jnp.exp(1j * angle_set[0] * qsp_op_phase_pattern)
