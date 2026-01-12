@@ -399,6 +399,7 @@ def q_oracle_sketch_matrix_index(
             gate_key = carry
             gate_key, subkey = random.split(gate_key)
             phase = _assemble_block_encoding_streamed(subkey)
+            data_gen.num_generated_samples += unit_sample_size
             return gate_key, (jnp.sin(phase), jnp.cos(phase))
 
         key, (sin, cos) = jax.lax.scan(_gate_step, key, None, length=degree)

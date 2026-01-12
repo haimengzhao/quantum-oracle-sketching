@@ -3,8 +3,6 @@ from jax import random
 
 from utils import int_dtype
 
-from utils import int_dtype
-
 
 class matrix_data:
     """
@@ -25,7 +23,7 @@ class matrix_data:
     def __init__(self, matrix):
         self.matrix = matrix
         self.shape = matrix.shape
-        self.num_generated_samples = 0
+        self.num_generated_samples = jnp.int64(0)
         self._nz_rows, self._nz_cols = jnp.nonzero(self.matrix)
         self._nz_rows = self._nz_rows.astype(int_dtype)
         self._nz_cols = self._nz_cols.astype(int_dtype)
@@ -103,7 +101,7 @@ class vector_data:
     def __init__(self, vector):
         self.vector = vector
         self.length = vector.shape[0]
-        self.num_generated_samples = 0
+        self.num_generated_samples = jnp.int64(0)
 
     def get_data(self, key, num_samples):
         """
@@ -148,7 +146,7 @@ class boolean_data:
     def __init__(self, truth_table):
         self.truth_table = truth_table
         self.length = truth_table.shape[0]
-        self.num_generated_samples = 0
+        self.num_generated_samples = jnp.int64(0)
 
     def get_data(self, key, num_samples):
         """
