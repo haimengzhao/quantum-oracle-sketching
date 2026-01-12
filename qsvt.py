@@ -313,6 +313,7 @@ apply_qsvt_imperfect_vectorized = jax.vmap(
 )
 
 
+@partial(jax.jit, static_argnums=(1,))
 def apply_qsvt_imperfect_diag(U_sequence, num_ancilla, angle_set):
     """
     Apply QSVT to a sequence of imperfect implementation of a Hermitian unitary U that block encodes some matrix using the given angles.

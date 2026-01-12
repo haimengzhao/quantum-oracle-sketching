@@ -7,6 +7,7 @@ from jax import random
 
 complex_dtype = jnp.complex128
 real_dtype = jnp.float64
+int_dtype = jnp.int32
 
 jax.config.update("jax_enable_x64", True)
 

@@ -3,12 +3,13 @@ import time
 import jax
 import jax.numpy as jnp
 from jax import random
+from tqdm import tqdm
 
 import primitives
 import qsvt
 import utils
 from data_generation import boolean_data, matrix_data, vector_data
-from utils import complex_dtype, real_dtype
+from utils import complex_dtype, int_dtype, real_dtype
 
 
 def q_state_sketch_flat_unitary(data, dim):
@@ -276,7 +277,15 @@ def q_oracle_sketch_matrix_element(data, dims, nnz):
     return sin
 
 
-def q_oracle_sketch_matrix_index(data, dims, axis, sparsity, nnz):
+def q_oracle_sketch_matrix_index(
+    data_gen,
+    key,
+    unit_sample_size,
+    dims,
+    axis,
+    sparsity,
+    nnz,
+):
     """
     Construct a block encoding of
     the sparse row or column index oracle.
@@ -292,7 +301,9 @@ def q_oracle_sketch_matrix_index(data, dims, axis, sparsity, nnz):
     The index register is padded to the next power of 2 internally to support binary search.
 
     Args:
-        data: tuple of (sampled_row_indices, sampled_col_indices, sampled_values)
+        data_gen: matrix_data instance, the data generator for the target matrix
+        key: jax.random.PRNGKey, random key for generating random samples
+        unit_sample_size: int, number of samples per elementary block encoding
         dims: tuple of (int, int), dimensions of the target matrix
         axis: int, 0 for row index oracle, 1 for column index oracle
         sparsity: int, maximum number of non-zero elements per row (axis=0) or column (axis=1).
@@ -302,94 +313,79 @@ def q_oracle_sketch_matrix_index(data, dims, axis, sparsity, nnz):
         the oracle as an array of shape (dims[axis], sparsity, dims[1 - axis])
     """
 
-    # if axis == 1, swap row and column indices
-    sampled_row_indices = data[axis]
-    sampled_col_indices = data[1 - axis]
-    num_samples = sampled_row_indices.shape[0]
-
     num_rows = dims[axis]
     bitlength_col = int(jnp.ceil(jnp.log2(dims[1 - axis])))
     num_cols = 2**bitlength_col  # pad index register to power of 2
+    unit_sample_size = int(unit_sample_size)
 
-    # 1. Construct cumulative counter unitary
-    # |i>|k>|l> -> exp( i * theta(i,k,l) ) |i>|k>|l>
-    # theta(i, k, l) = pi / (2s+1) * (|{j: A_{ij} \neq 0, j < l}| - k + 1/2)
-    # using random gates of the form
-    # |i>|k>|l> -> exp( i * pi * nnz / (2s+1) / num_samples * \sum_t 1[i_t=i, j_t<l] ) |i>|k>|l>
-    # note that the -k + 1/2 part can be done separately
-    # and the remaining terms does not depend on k
-
-    phase = jnp.zeros((num_rows, num_cols), dtype=real_dtype)
-    # calculate \sum_t 1[i_t=i, j_t=l]
-    phase = phase.at[sampled_row_indices, sampled_col_indices].add(1.0)
-    counts = phase
-    # calculate \sum_t 1[i_t=i, j_t <= l]
-    phase = phase.cumsum(axis=1)  # cumulative count along each row (inclusive)
-    # convert to \sum_t 1[i_t=i, j_t < l]
-    phase = phase - counts
-
-    t = jnp.pi * nnz / (2 * sparsity + 1)
-    phase = phase * t / num_samples
-
-    # expand to include sparsity index k
-    phase = jnp.repeat(
-        phase[:, None, :], sparsity, axis=1
-    )  # shape (num_rows, sparsity, num_cols)
-
-    # - k + 1/2
-    # Note that k starts from 1 to sparsity
     k_indices = jnp.arange(sparsity, dtype=real_dtype) + 1  # shape (sparsity,)
-    phase = phase - (k_indices[None, :, None] - 0.5) * jnp.pi / (
-        2 * sparsity + 1
-    )  # shape (num_rows, sparsity, num_cols)
+    t = jnp.pi * nnz / (2 * sparsity + 1)
+    k_phase_scale = jnp.pi / (2 * sparsity + 1)
 
-    phase = phase.reshape(
-        num_rows * sparsity * num_cols
-    )  # shape (num_rows * sparsity * num_cols,)
-    # 2. Use LCU to get sin(theta(i,k,l))
-    sin = jnp.sin(phase)  # shape (num_rows * sparsity * num_cols,)
-    cos = jnp.cos(phase)  # shape (num_rows * sparsity * num_cols,)
+    nz_rows = data_gen._nz_rows
+    nz_cols = data_gen._nz_cols
+    nnz_entries = data_gen._nnz
 
-    # 3. Apply the sign function using QSVT
-    # to get the phase cumulative counter oracle |i>|k>|l> -> (-1)^{ 1[C(i, l) < k] } |i>|k>|l>
+    def _assemble_block_encoding_streamed(sample_key):
+        # 1. Construct cumulative counter unitary
+        # |i>|k>|l> -> exp( i * theta(i,k,l) ) |i>|k>|l>
+        # theta(i, k, l) = pi / (2s+1) * (|{j: A_{ij} \neq 0, j < l}| - k + 1/2)
+        # using random gates of the form
+        # |i>|k>|l> -> exp( i * pi * nnz / (2s+1) / num_samples * \sum_t 1[i_t=i, j_t<l] ) |i>|k>|l>
+        # note that the -k + 1/2 part can be done separately
+        # and the remaining terms does not depend on k
+        phase = jnp.zeros((num_rows, num_cols), dtype=int_dtype)
+        sampled_indices = random.randint(
+            sample_key,
+            shape=(unit_sample_size,),
+            minval=0,
+            maxval=nnz_entries,
+            dtype=int_dtype,
+        )
+        sampled_rows = nz_rows[sampled_indices]
+        sampled_cols = nz_cols[sampled_indices]
+        # calculate \sum_t 1[i_t=i, j_t=l]
+        if axis == 0:
+            phase = phase.at[sampled_rows, sampled_cols].add(1)
+        else:
+            phase = phase.at[sampled_cols, sampled_rows].add(1)
+
+        counts = phase
+        # calculate \sum_t 1[i_t=i, j_t <= l]
+        phase = phase.cumsum(axis=1)  # cumulative count along each row (inclusive)
+        # convert to \sum_t 1[i_t=i, j_t < l]
+        phase = phase - counts
+
+        phase = phase.astype(real_dtype) * (t / unit_sample_size)
+
+        # expand to include sparsity index k
+        phase = jnp.repeat(
+            phase[:, None, :], sparsity, axis=1
+        )  # shape (num_rows, sparsity, num_cols)
+
+        # - k + 1/2
+        # Note that k starts from 1 to sparsity
+        phase = phase - (k_indices[None, :, None] - 0.5) * k_phase_scale
+
+        phase = phase.reshape(
+            num_rows * sparsity * num_cols
+        )  # shape (num_rows * sparsity * num_cols,)
+
+        return phase
+
+    _assemble_block_encoding_streamed = jax.jit(_assemble_block_encoding_streamed)
+
+    # QSVT setup
     threshold = jnp.pi / (4 * sparsity + 2)
     degree = 51
     angle_set, scale = qsvt.get_qsvt_angles_sign(
         degree=degree, threshold=threshold, rescale=0.99
     )
 
-    print("Minimal signal to be digitized:", jnp.min(jnp.abs(sin)))
+    hadamard = jnp.array([[1, 1], [1, -1]], dtype=real_dtype) / jnp.sqrt(2)
     print("QSVT sign function threshold:", threshold)
 
-    block_encoding = jnp.stack([sin, cos, cos, -sin], axis=0).reshape(
-        2, 2, num_rows * sparsity * num_cols
-    )  # shape (2, 2, num_rows * sparsity * num_cols)
-    block_encoding = qsvt.apply_qsvt_diag(
-        block_encoding, num_ancilla=1, angle_set=angle_set
-    )  # shape (2, 2, num_rows * sparsity * num_cols)
-    # obtain the phase oracle |i>|k>|l> -> (-1)^{ 1[C(i, l) < k] } |i>|k>|l>
-    block_encoding = jnp.real(
-        block_encoding[0, 0]
-    )  # shape (num_rows * sparsity * num_cols,)
-    block_encoding = block_encoding.reshape(
-        num_rows, sparsity, num_cols
-    )  # shape (num_rows, sparsity, num_cols)
-
-    # 4. Construct the XOR oracle |i>|k>|l>|0> -> |i>|k>|l>|1[C(i, l) < k]>
-    hadamard = jnp.array([[1, 1], [1, -1]], dtype=real_dtype) / jnp.sqrt(2)
-    # controlled phase oracle: |0> apply identity, |1> apply phase oracle
-    cont_block_encoding = jnp.stack(
-        [jnp.ones_like(block_encoding), block_encoding], axis=-1
-    )  # shape (num_rows, sparsity, num_cols, 2)
-    xor_oracle = jnp.einsum(
-        "am,ijkm,mn->ijkan",
-        hadamard,
-        cont_block_encoding,
-        hadamard,
-    )  # shape (num_rows, sparsity, num_cols, 2, 2)
-
-    # 5. Construct the index oracle
-    # initial state on |l>|o> = |0^n>|0>
+    # initial state on |l>|o> = |0^n>|0> for binary search
     state_lo = jnp.zeros((num_cols, 2), dtype=real_dtype)
     state_lo = state_lo.at[0, 0].set(1.0)  # shape (num_cols, 2)
     state_lo = state_lo[None, None, :, :]  # shape (1, 1, num_cols, 2)
@@ -397,7 +393,48 @@ def q_oracle_sketch_matrix_index(data, dims, axis, sparsity, nnz):
         state_lo, (num_rows, sparsity, 1, 1)
     )  # shape (num_rows, sparsity, num_cols, 2)
 
-    for bit in range(bitlength_col - 1, -1, -1):  # MSB-first (bit is LSB index)
+    for bit in tqdm(range(bitlength_col - 1, -1, -1)):  # MSB-first (bit is LSB index)
+        # 2. Use LCU to get sin(theta(i,k,l))
+        def _gate_step(carry, _):
+            gate_key = carry
+            gate_key, subkey = random.split(gate_key)
+            phase = _assemble_block_encoding_streamed(subkey)
+            return gate_key, (jnp.sin(phase), jnp.cos(phase))
+
+        key, (sin, cos) = jax.lax.scan(_gate_step, key, None, length=degree)
+
+        # 3. Apply the sign function using QSVT
+        # to get the phase cumulative counter oracle |i>|k>|l> -> (-1)^{ 1[C(i, l) < k] } |i>|k>|l>
+        block_encoding = jnp.stack([sin, cos, cos, -sin], axis=0).reshape(
+            2, 2, degree, num_rows * sparsity * num_cols
+        )  # shape (2, 2, degree, num_rows * sparsity * num_cols)
+        block_encoding = block_encoding.transpose(
+            2, 0, 1, 3
+        )  # shape (degree, 2, 2, num_rows * sparsity * num_cols)
+        block_encoding = qsvt.apply_qsvt_imperfect_diag(
+            block_encoding, num_ancilla=1, angle_set=angle_set
+        )  # shape (2, 2, num_rows * sparsity * num_cols)
+        # obtain the phase oracle |i>|k>|l> -> (-1)^{ 1[C(i, l) < k] } |i>|k>|l>
+        block_encoding = jnp.real(
+            block_encoding[0, 0]
+        )  # shape (num_rows * sparsity * num_cols,)
+        block_encoding = block_encoding.reshape(
+            num_rows, sparsity, num_cols
+        )  # shape (num_rows, sparsity, num_cols)
+
+        # 4. Construct the XOR oracle |i>|k>|l>|0> -> |i>|k>|l>|1[C(i, l) < k]>
+        # controlled phase oracle: |0> apply identity, |1> apply phase oracle
+        cont_block_encoding = jnp.stack(
+            [jnp.ones_like(block_encoding), block_encoding], axis=-1
+        )  # shape (num_rows, sparsity, num_cols, 2)
+        xor_oracle = jnp.einsum(
+            "am,ijkm,mn->ijkan",
+            hadamard,
+            cont_block_encoding,
+            hadamard,
+        )  # shape (num_rows, sparsity, num_cols, 2, 2)
+
+        # 5. Construct the index oracle
         # SWAP_{l_t, o} X_{l_t} O X_{l_t}
 
         high = 1 << (bitlength_col - bit - 1)
@@ -702,6 +739,65 @@ def _test_q_oracle_sketch_matrix_element(key):
     assert jnp.isclose(error, 0, atol=1e-1)
 
 
+def _test_q_oracle_sketch_matrix_index(key):
+    # random sparse matrix
+    dim1 = 1000
+    dim2 = 1000
+    nnz = dim1 * 3
+    num_samples = int(1e7)
+
+    print(f"Testing sparse matrix with dimension {dim1} x {dim2}, nnz = {nnz}")
+
+    key, subkey = random.split(key)
+    row_indices = random.randint(subkey, (nnz,), 0, dim1)
+    key, subkey = random.split(key)
+    col_indices = random.randint(subkey, (nnz,), 0, dim2)
+    key, subkey = random.split(key)
+    values = random.normal(subkey, (nnz,))
+
+    A = jnp.zeros((dim1, dim2)).at[row_indices, col_indices].set(values)
+    nnz = jnp.count_nonzero(A)
+    row_counts = jnp.sum(A != 0, axis=1)
+    row_sparsity = int(jnp.max(row_counts))
+
+    print(f"Matrix row sparsity: {row_sparsity}")
+
+    data_gen = matrix_data(A)
+
+    print(f"Sample size: {num_samples:.2e}")
+
+    start_time = time.time()
+
+    index_oracle = q_oracle_sketch_matrix_index(
+        data_gen,
+        key,
+        unit_sample_size=num_samples,
+        dims=A.shape,
+        axis=0,
+        sparsity=row_sparsity,
+        nnz=nnz,
+    )
+
+    end_time = time.time()
+    print(f"Index oracle construction time: {end_time - start_time:.3e} seconds")
+
+    col_mask = A != 0
+    col_indices = jnp.arange(dim2)
+    expected_cols = jnp.where(col_mask, col_indices, dim2)
+    expected_cols = jnp.sort(expected_cols, axis=1)[:, :row_sparsity]
+
+    pred = jnp.argmax(jnp.abs(index_oracle), axis=-1)
+    valid = jnp.arange(row_sparsity)[None, :] < row_counts[:, None]
+
+    assert jnp.all((pred == expected_cols) | ~valid)
+    print("Index reconstruction correct.")
+
+    pred_value = jnp.take_along_axis(index_oracle, pred[..., None], axis=-1)[..., 0]
+    error = jnp.max(jnp.where(valid, jnp.abs(1.0 - pred_value), 0.0))
+    print(f"Matrix index oracle reconstruction error: {error:.3e}")
+    print(f"Number of samples used: {data_gen.num_generated_samples:.3e}")
+
+
 def _test_q_oracle_sketch_matrix_row_index(key):
     # random sparse matrix
     dim1 = 100
@@ -755,60 +851,6 @@ def _test_q_oracle_sketch_matrix_row_index(key):
     pred_value = jnp.take_along_axis(index_oracle, pred[..., None], axis=-1)[..., 0]
     error = jnp.max(jnp.where(valid, jnp.abs(1.0 - pred_value), 0.0))
     print(f"Matrix row index oracle reconstruction error: {error:.3e}")
-
-
-def _test_q_oracle_sketch_matrix_index(key):
-    # random sparse matrix
-    dim1 = 1000
-    dim2 = 100
-    nnz = dim1 * 3
-    num_samples = int(1e7)
-
-    print(f"Testing sparse matrix with dimension {dim1} x {dim2}, nnz = {nnz}")
-
-    key, subkey = random.split(key)
-    row_indices = random.randint(subkey, (nnz,), 0, dim1)
-    key, subkey = random.split(key)
-    col_indices = random.randint(subkey, (nnz,), 0, dim2)
-    key, subkey = random.split(key)
-    values = random.normal(subkey, (nnz,))
-
-    A = jnp.zeros((dim1, dim2)).at[row_indices, col_indices].set(values)
-    nnz = jnp.count_nonzero(A)
-    row_counts = jnp.sum(A != 0, axis=1)
-    row_sparsity = int(jnp.max(row_counts))
-
-    print(f"Matrix row sparsity: {row_sparsity}")
-
-    data_gen = matrix_data(A)
-    key, subkey = random.split(key)
-    data = data_gen.get_matrix_element_data(subkey, num_samples)
-
-    print(f"Sample size: {num_samples:.2e}")
-
-    start_time = time.time()
-
-    index_oracle = q_oracle_sketch_matrix_index(
-        data, dims=A.shape, axis=0, sparsity=row_sparsity, nnz=nnz
-    )
-
-    end_time = time.time()
-    print(f"Index oracle construction time: {end_time - start_time:.3e} seconds")
-
-    col_mask = A != 0
-    col_indices = jnp.arange(dim2)
-    expected_cols = jnp.where(col_mask, col_indices, dim2)
-    expected_cols = jnp.sort(expected_cols, axis=1)[:, :row_sparsity]
-
-    pred = jnp.argmax(jnp.abs(index_oracle), axis=-1)
-    valid = jnp.arange(row_sparsity)[None, :] < row_counts[:, None]
-
-    assert jnp.all((pred == expected_cols) | ~valid)
-    print("Index reconstruction correct.")
-
-    pred_value = jnp.take_along_axis(index_oracle, pred[..., None], axis=-1)[..., 0]
-    error = jnp.max(jnp.where(valid, jnp.abs(1.0 - pred_value), 0.0))
-    print(f"Matrix index oracle reconstruction error: {error:.3e}")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,10 @@
 import jax.numpy as jnp
 from jax import random
 
+from utils import int_dtype
+
+from utils import int_dtype
+
 
 class matrix_data:
     """
@@ -12,7 +16,7 @@ class matrix_data:
         num_generated_samples: int, the number of samples generated so far.
 
     Methods:
-        get_matrix_element_data(key, num_samples):
+        get_matrix_element_data(key, num_samples, return_values=True):
             sample num_samples non-zero matrix elements.
         get_row_data(key, num_samples):
             sample num_samples rows of the matrix.
@@ -22,33 +26,39 @@ class matrix_data:
         self.matrix = matrix
         self.shape = matrix.shape
         self.num_generated_samples = 0
+        self._nz_rows, self._nz_cols = jnp.nonzero(self.matrix)
+        self._nz_rows = self._nz_rows.astype(int_dtype)
+        self._nz_cols = self._nz_cols.astype(int_dtype)
+        self._nnz = self._nz_rows.shape[0]
 
-    def get_matrix_element_data(self, key, num_samples):
+    def get_matrix_element_data(self, key, num_samples, return_values=True):
         """
         Get uniform random samples of non-zero matrix elements.
 
         Args:
             key: jax.random.PRNGKey, the random key.
             num_samples: int, number of samples to generate.
+            return_values: bool, whether to return the values of the sampled elements.
 
         Returns:
             sampled_rows: array of shape (num_samples,), the row indices of the sampled elements.
             sampled_cols: array of shape (num_samples,), the column indices of the sampled elements.
-            sampled_values: array of shape (num_samples,), the values of the sampled elements.
+            sampled_values (if return_values=True): array of shape (num_samples,), the values of the sampled elements.
         """
-
-        rows, cols = jnp.nonzero(self.matrix)
-        indices = jnp.arange(len(rows))
-        sampled_indices = random.choice(
-            key, indices, shape=(num_samples,), replace=True
-        )
-        sampled_rows = rows[sampled_indices]
-        sampled_cols = cols[sampled_indices]
-        sampled_values = self.matrix[sampled_rows, sampled_cols]
 
         self.num_generated_samples += num_samples
 
-        return sampled_rows, sampled_cols, sampled_values
+        sampled_indices = random.randint(
+            key, shape=(num_samples,), minval=0, maxval=self._nnz, dtype=int_dtype
+        )
+        sampled_rows = self._nz_rows[sampled_indices]
+        sampled_cols = self._nz_cols[sampled_indices]
+
+        if return_values:
+            sampled_values = self.matrix[sampled_rows, sampled_cols]
+            return sampled_rows, sampled_cols, sampled_values
+
+        return sampled_rows, sampled_cols
 
     def get_row_data(self, key, num_samples):
         """
@@ -64,7 +74,10 @@ class matrix_data:
         """
         num_rows = self.shape[0]
         sampled_rows = random.choice(
-            key, jnp.arange(num_rows), shape=(num_samples,), replace=True
+            key,
+            jnp.arange(num_rows, dtype=int_dtype),
+            shape=(num_samples,),
+            replace=True,
         )
         sampled_row_vectors = self.matrix[sampled_rows]
 
@@ -106,7 +119,10 @@ class vector_data:
         """
 
         sampled_indices = random.choice(
-            key, jnp.arange(self.length), shape=(num_samples,), replace=True
+            key,
+            jnp.arange(self.length, dtype=int_dtype),
+            shape=(num_samples,),
+            replace=True,
         )
         sampled_values = self.vector[sampled_indices]
 
@@ -147,7 +163,10 @@ class boolean_data:
             sampled_values: array of shape (num_samples,), the values of the sampled queries.
         """
         sampled_indices = random.choice(
-            key, jnp.arange(self.length), shape=(num_samples,), replace=True
+            key,
+            jnp.arange(self.length, dtype=int_dtype),
+            shape=(num_samples,),
+            replace=True,
         )
         sampled_values = self.truth_table[sampled_indices]
 
