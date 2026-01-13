@@ -68,8 +68,11 @@ def q_state_sketch(vector, key, unit_num_samples, degree=4):
         (state, num_samples): quantum state sketch as an array of shape (dim,) and the number of samples used
 
     """
-
-    dim = vector.shape[0]
+    orig_dim = vector.shape[0]
+    dim = int(2 ** jnp.ceil(jnp.log2(vector.shape[0])))
+    vector = jnp.pad(
+        vector, (0, int(dim) - orig_dim), mode="constant", constant_values=0
+    )
     norm = jnp.linalg.norm(vector)
     prob = jnp.ones_like(vector, dtype=real_dtype) / dim
 
@@ -163,6 +166,7 @@ def q_state_sketch(vector, key, unit_num_samples, degree=4):
     hadamard = utils.unnormalized_hadamard_transform(int(jnp.round(jnp.log2(dim))))
     state = hadamard @ state / jnp.sqrt(dim)
     state = random_signs * state
+    state = state[:orig_dim]  # truncate back to the original dimension
 
     return state, unit_num_samples * (angle_set.shape[0] - 1)
 
@@ -201,7 +205,7 @@ def _test_q_state_sketch_flat(key):
 def _test_q_state_sketch(key):
     print("-" * 10)
     print("Testing quantum state sketching for general vectors...")
-    N = 1024
+    N = 1000
     num_samples = int(1e4)
 
     print(f"Testing general vector with dimension N = {N}")
