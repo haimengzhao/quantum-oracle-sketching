@@ -936,31 +936,31 @@ def _test_matrix_block_encoding(key):
 if __name__ == "__main__":
     key = random.PRNGKey(0)
 
-    # print("-" * 10)
-    # print("Testing quantum state sketching for flat vectors...")
-    # _test_q_state_sketch_flat(key)
+    print("-" * 10)
+    print("Testing quantum state sketching for flat vectors...")
+    _test_q_state_sketch_flat(key)
 
-    # print("-" * 10)
-    # print("Testing quantum state sketching for general vectors...")
-    # _test_q_state_sketch(key)
+    print("-" * 10)
+    print("Testing quantum state sketching for general vectors...")
+    _test_q_state_sketch(key)
 
-    # print("-" * 10)
-    # print("Testing quantum oracle sketching for boolean functions...")
-    # _test_q_oracle_sketch_boolean(key)
+    print("-" * 10)
+    print("Testing quantum oracle sketching for boolean functions...")
+    _test_q_oracle_sketch_boolean(key)
 
-    # print("-" * 10)
-    # print("Testing quantum oracle sketching for matrix sparse element oracle...")
-    # _test_q_oracle_sketch_matrix_element(key)
+    print("-" * 10)
+    print("Testing quantum oracle sketching for matrix sparse element oracle...")
+    _test_q_oracle_sketch_matrix_element(key)
 
-    # print("-" * 10)
-    # print("Testing quantum oracle sketching for matrix sparse index oracle...")
-    # _test_q_oracle_sketch_matrix_index(key)
+    print("-" * 10)
+    print("Testing quantum oracle sketching for matrix sparse index oracle...")
+    _test_q_oracle_sketch_matrix_index(key)
 
-    # print("-" * 10)
-    # print(
-    #     "Testing quantum oracle sketching for matrix sparse row index oracle with random row data..."
-    # )
-    # _test_q_oracle_sketch_matrix_row_index(key)
+    print("-" * 10)
+    print(
+        "Testing quantum oracle sketching for matrix sparse row index oracle with random row data..."
+    )
+    _test_q_oracle_sketch_matrix_row_index(key)
 
     print("-" * 10)
     print("Testing quantum oracle sketching for sparse matrix block encoding...")
