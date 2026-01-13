@@ -141,6 +141,7 @@ def block_encoding_from_sparse_oracles(
         (row_index_oracle.shape[0], col_index_oracle.shape[0])
     )  # shape (num_rows, num_cols)
 
+    # Lemma 48 in https://arxiv.org/pdf/1806.01838v1
     block_encoding = row_index_oracle.conj() * value_oracle * col_index_oracle.T
 
     return block_encoding
