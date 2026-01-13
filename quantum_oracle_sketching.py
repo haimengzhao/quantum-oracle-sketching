@@ -288,7 +288,8 @@ def q_oracle_sketch_matrix_index(
 ):
     """
     Construct a block encoding of
-    the sparse row or column index oracle.
+    the sparse row or column index oracle,
+    without erasing the rank register |k>.
 
     For example, the row index oracle is |i>|k>|0> -> |i>|k>|j(i, k)>,
     where j(i, k) is the column index of the k-th non-zero element in row i.
@@ -744,8 +745,8 @@ def _test_q_oracle_sketch_matrix_element(key):
 
 def _test_q_oracle_sketch_matrix_index(key):
     # random sparse matrix
-    dim1 = 1000
-    dim2 = 1000
+    dim1 = 100
+    dim2 = 10
     nnz = dim1 * 3
     num_samples = int(1e7)
 

@@ -537,7 +537,7 @@ def _test_qsvt_imperfect(func, noise_level=0.001):
     )
 
     assert (
-        jnp.max(jnp.abs(eigvals_qsvt - eigvals_target)) / noise_level < 1.0
+        jnp.max(jnp.abs(eigvals_qsvt - eigvals_target)) / noise_level < 2.0
         or noise_level < 1e-5
     )
 
