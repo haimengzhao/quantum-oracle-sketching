@@ -5,8 +5,8 @@ import jax
 import jax.numpy as jnp
 from jax import random
 
-complex_dtype = jnp.complex64
-real_dtype = jnp.float32
+complex_dtype = jnp.complex128
+real_dtype = jnp.float64
 int_dtype = jnp.int32
 
 jax.config.update("jax_enable_x64", True)
@@ -18,6 +18,12 @@ def suppress_stdout_stderr():
     with open(devnull, "w") as fnull:
         with redirect_stderr(fnull) as err, redirect_stdout(fnull) as out:
             yield (err, out)
+
+
+def infidelity(state1, state2):
+    """Compute the infidelity between two quantum states."""
+    fidelity = jnp.abs(jnp.vdot(state1, state2)) ** 2
+    return 1 - fidelity
 
 
 def unnormalized_hadamard_transform(n):

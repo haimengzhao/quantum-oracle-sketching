@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 from jax import random
 
-from utils import complex_dtype, int_dtype, real_dtype
+from utils import int_dtype, real_dtype
 
 
 class matrix_data:

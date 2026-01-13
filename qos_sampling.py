@@ -11,10 +11,20 @@ import utils
 from data_generation import boolean_data, matrix_data, vector_data
 from utils import complex_dtype, int_dtype, real_dtype
 
+"""
+This module implements quantum state and oracle sketching methods
+with active data sampling. That means we assemble each oracle query
+with randomly sampled data points. This method is intuitive, but
+leads to a quadratically overestimated error due to the mixing lemma 
+phenomenon. See e.g., https://arxiv.org/abs/2008.11751 for discussion.
+For example, the Euclidean error of the quantum state sketch constructed 
+here will be much larger than that in qos.py for the same number of samples.
+"""
+
 
 def q_state_sketch_flat_unitary(data, dim):
     """
-    Construct quantum state sketch preparation unitary from vector data samples.
+    Construct the quantum state sketch preparation unitary from vector data samples.
 
     Use 1 ancilla qubit.
 
@@ -41,7 +51,7 @@ def q_state_sketch_flat_unitary(data, dim):
 
 def q_state_sketch_flat(data, dim):
     """
-    Construct quantum state sketch from vector data samples.
+    Construct the quantum state sketch from vector data samples.
 
     Use 1 ancilla qubit.
 
@@ -62,7 +72,7 @@ def q_state_sketch_flat(data, dim):
 
 def q_state_sketch(data, dim, norm, key, degree=4):
     """
-    Construct quantum state sketch from vector data samples.
+    Construct the quantum state sketch from vector data samples.
 
     Use 2 ancilla qubit.
     One for the first LCU and QSVT, one for the second LCU to extract real part.
@@ -199,7 +209,7 @@ def q_state_sketch(data, dim, norm, key, degree=4):
 
 def q_oracle_sketch_boolean(data, dim):
     """
-    Construct quantum oracle sketch from boolean function data samples.
+    Construct the quantum oracle sketch from boolean function data samples.
 
     Use 0 ancilla qubit.
 
@@ -569,7 +579,7 @@ def _test_q_state_sketch_flat(key):
     vec_data = vector_data(x)
 
     key, subkey = random.split(key)
-    num_samples = int(1e6)
+    num_samples = int(1e7)
     data = vec_data.get_data(subkey, num_samples=num_samples)
 
     print(f"Sample size: {num_samples:.2e}")
@@ -582,12 +592,9 @@ def _test_q_state_sketch_flat(key):
 
     # test reconstruction
     recon_x = state
-    print(
-        f"State reconstruction error in trace distance: {jnp.sqrt(1 - jnp.abs(jnp.vdot(recon_x, x / jnp.sqrt(N))) ** 2):.3e}"
-    )
-    assert jnp.allclose(
-        jnp.sqrt(1 - jnp.abs(jnp.vdot(recon_x, x / jnp.sqrt(N))) ** 2), 0, atol=1e-1
-    )
+    error = jnp.linalg.norm(recon_x - x / jnp.sqrt(N))
+    print(f"State reconstruction error in Euclidean distance: {error:.3e}")
+    assert jnp.allclose(error, 0, atol=1e-1)
 
 
 def _test_q_state_sketch(key):
