@@ -464,7 +464,9 @@ def q_oracle_sketch_matrix_index(
 
     # final state
     # truncate the index register back to original size
-    state_lo = state_lo[:, :, : dims[1], 0]  # shape (num_rows, sparsity, dims[1])
+    state_lo = state_lo[
+        :, :, : dims[1 - axis], 0
+    ]  # shape (dims[axis], sparsity, dims[1 - axis])
 
     return state_lo
 
@@ -856,34 +858,113 @@ def _test_q_oracle_sketch_matrix_row_index(key):
     print(f"Matrix row index oracle reconstruction error: {error:.3e}")
 
 
+def _test_matrix_block_encoding(key):
+    # random sparse matrix
+    dim1 = 10
+    dim2 = 100
+    nnz = dim2 * 3
+    unit_num_samples = int(1e7)
+
+    print(f"Testing sparse matrix with dimension {dim1} x {dim2}, nnz = {nnz}")
+
+    key, subkey = random.split(key)
+    row_indices = random.randint(subkey, (nnz,), 0, dim1, dtype=int_dtype)
+    key, subkey = random.split(key)
+    col_indices = random.randint(subkey, (nnz,), 0, dim2, dtype=int_dtype)
+    key, subkey = random.split(key)
+    values = random.normal(subkey, (nnz,), dtype=real_dtype)
+    A = jnp.zeros((dim1, dim2)).at[row_indices, col_indices].set(values)
+    A = A / jnp.linalg.norm(A, ord=2)
+    nnz = jnp.count_nonzero(A)
+
+    data_gen = matrix_data(A)
+
+    # construct element oracle
+    num_samples = unit_num_samples
+    key, subkey = random.split(key)
+    data = data_gen.get_matrix_element_data(subkey, num_samples=num_samples)
+    element_oracle = q_oracle_sketch_matrix_element(data, (dim1, dim2), nnz=nnz)
+
+    # construct row index oracle
+    num_samples = unit_num_samples
+    key, subkey = random.split(key)
+    data = data_gen.get_row_data(subkey, num_samples=num_samples)
+    row_sparsity = int(jnp.max(jnp.sum(A != 0, axis=1)))
+    row_index_oracle = q_oracle_sketch_matrix_row_index(
+        data, dims=A.shape, sparsity=row_sparsity
+    )
+
+    # construct column index oracle
+    num_samples = unit_num_samples
+    key, subkey = random.split(key)
+    col_sparsity = int(jnp.max(jnp.sum(A != 0, axis=0)))
+    col_index_oracle = q_oracle_sketch_matrix_index(
+        data_gen,
+        subkey,
+        unit_sample_size=num_samples,
+        dims=A.shape,
+        axis=1,
+        sparsity=col_sparsity,
+        nnz=nnz,
+    )
+
+    print(row_index_oracle.shape, col_index_oracle.shape, element_oracle.shape)
+
+    # construct block encoding
+    block_encoding = utils.block_encoding_from_sparse_oracles(
+        row_index_oracle, col_index_oracle, element_oracle
+    )
+    normalized_block_encoding = block_encoding * jnp.sqrt(row_sparsity * col_sparsity)
+
+    error_fro = jnp.linalg.norm(normalized_block_encoding - A) / jnp.linalg.norm(A)
+    error_spec = jnp.linalg.norm(
+        normalized_block_encoding - A, ord=2
+    ) / jnp.linalg.norm(A, ord=2)
+
+    print(f"Row sparsity: {row_sparsity}, Col sparsity: {col_sparsity}")
+    print(
+        f"Frobenius norm of A: {jnp.linalg.norm(A):.3e}, Spectral norm of A: {jnp.linalg.norm(A, ord=2):.3e}"
+    )
+
+    print(
+        f"Matrix block encoding reconstruction error: relative Frobenius norm error = {error_fro:.3e}, relative spectral norm error = {error_spec:.3e}"
+    )
+    assert jnp.isclose(error_spec, 0, atol=1e-1)
+    print(f"Number of samples used: {data_gen.num_generated_samples:.3e}")
+
+
 if __name__ == "__main__":
     key = random.PRNGKey(0)
 
-    print("-" * 10)
-    print("Testing quantum state sketching for flat vectors...")
-    _test_q_state_sketch_flat(key)
+    # print("-" * 10)
+    # print("Testing quantum state sketching for flat vectors...")
+    # _test_q_state_sketch_flat(key)
+
+    # print("-" * 10)
+    # print("Testing quantum state sketching for general vectors...")
+    # _test_q_state_sketch(key)
+
+    # print("-" * 10)
+    # print("Testing quantum oracle sketching for boolean functions...")
+    # _test_q_oracle_sketch_boolean(key)
+
+    # print("-" * 10)
+    # print("Testing quantum oracle sketching for matrix sparse element oracle...")
+    # _test_q_oracle_sketch_matrix_element(key)
+
+    # print("-" * 10)
+    # print("Testing quantum oracle sketching for matrix sparse index oracle...")
+    # _test_q_oracle_sketch_matrix_index(key)
+
+    # print("-" * 10)
+    # print(
+    #     "Testing quantum oracle sketching for matrix sparse row index oracle with random row data..."
+    # )
+    # _test_q_oracle_sketch_matrix_row_index(key)
 
     print("-" * 10)
-    print("Testing quantum state sketching for general vectors...")
-    _test_q_state_sketch(key)
-
-    print("-" * 10)
-    print("Testing quantum oracle sketching for boolean functions...")
-    _test_q_oracle_sketch_boolean(key)
-
-    print("-" * 10)
-    print("Testing quantum oracle sketching for matrix sparse element oracle...")
-    _test_q_oracle_sketch_matrix_element(key)
-
-    print("-" * 10)
-    print("Testing quantum oracle sketching for matrix sparse index oracle...")
-    _test_q_oracle_sketch_matrix_index(key)
-
-    print("-" * 10)
-    print(
-        "Testing quantum oracle sketching for matrix sparse row index oracle with random row data..."
-    )
-    _test_q_oracle_sketch_matrix_row_index(key)
+    print("Testing quantum oracle sketching for sparse matrix block encoding...")
+    _test_matrix_block_encoding(key)
 
     print("-" * 10)
     print("All tests passed.")

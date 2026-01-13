@@ -111,6 +111,41 @@ def hermitian_block_encoding(U):
     return V
 
 
+def block_encoding_from_sparse_oracles(
+    row_index_oracle, col_index_oracle, value_oracle
+):
+    """
+    Construct a block encoding of a sparse matrix using
+    the sparse index and element oracles.
+
+    Args:
+        row_index_oracle: array of shape (num_rows, row_sparsity, num_cols), the row index oracle.
+        col_index_oracle: array of shape (num_cols, col_sparsity, num_rows), the column index oracle.
+        value_oracle: array of shape (num_rows * num_cols), the element oracle.
+
+    Returns:
+        block_encoding: array of shape (num_rows, num_cols), the block encoded matrix, normalized by sqrt(row_sparsity * col_sparsity).
+    """
+
+    row_sparsity = row_index_oracle.shape[1]
+    col_sparsity = col_index_oracle.shape[1]
+
+    row_index_oracle = jnp.sum(row_index_oracle, axis=1) / jnp.sqrt(
+        row_sparsity
+    )  # shape (num_rows, num_cols)
+    col_index_oracle = jnp.sum(col_index_oracle, axis=1) / jnp.sqrt(
+        col_sparsity
+    )  # shape (num_cols, num_rows)
+
+    value_oracle = value_oracle.reshape(
+        (row_index_oracle.shape[0], col_index_oracle.shape[0])
+    )  # shape (num_rows, num_cols)
+
+    block_encoding = row_index_oracle.conj() * value_oracle * col_index_oracle.T
+
+    return block_encoding
+
+
 """
 Tests
 """
