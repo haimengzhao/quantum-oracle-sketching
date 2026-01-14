@@ -1,3 +1,5 @@
+import time
+
 import jax
 import jax.numpy as jnp
 from jax import random
@@ -63,6 +65,7 @@ def q_state_sketch(vector, key, unit_num_samples, degree=4):
         key: jax.random.PRNGKey, random key for generating random signs
         unit_num_samples: int, number of samples to use in each sketch
         degree: even int, degree of the polynomial approximation for arcsin(x), default 4
+
     Returns:
         (state, num_samples): quantum state sketch as an array of shape (dim,) and the number of samples used
 
@@ -179,6 +182,7 @@ def q_oracle_sketch_boolean(truth_table, num_samples):
     Args:
         truth_table: array of shape (dim,), the truth table of the boolean function
         num_samples: int, number of samples to use in the sketch
+
     Returns:
         (diagonal, num_samples): diagonal of the phase oracle sketch as an array of shape (dim,)
             and the number of samples used
@@ -195,6 +199,63 @@ def q_oracle_sketch_boolean(truth_table, num_samples):
     diag = jnp.exp(log_diag)
 
     return diag, num_samples
+
+
+def q_oracle_sketch_matrix_element(matrix, num_samples):
+    """
+    Construct a Hermitian block encoding of
+    the sparse element oracle |i>|j> -> A_{ij} |i>|j> from matrix data samples.
+
+    Use 1 ancilla qubit.
+
+    Assume that the matrix elements are in [-1,1].
+
+    Args:
+        matrix: array of shape (num_rows, num_cols), the input matrix
+        num_samples: int, number of samples to use in the sketch
+
+    Returns:
+        (diag, num_samples): the diagonal of the relevant block of the block encoding
+            as an array of shape (num_rows * num_cols,) and the number of samples used
+    """
+
+    dims = matrix.shape
+    nnz = jnp.count_nonzero(matrix)
+
+    t = nnz
+
+    # 1. construct the unitary U: |i>|j> -> exp( i * B_{ij} ) |i>|j>
+    # where B_{ij} = arcsin( A_{ij} )
+
+    # prob is uniform over all non-zero elements
+    prob = jnp.zeros_like(matrix, dtype=real_dtype)
+    prob = prob.at[matrix != 0].set(1.0 / nnz)
+
+    # expected single gate
+    log_diag = jnp.log1p(
+        prob * jnp.expm1(1j * t / num_samples * jnp.arcsin(matrix))
+    )  # shape (num_rows, num_cols)
+    # concatenate all gates
+    log_diag = num_samples * log_diag  # shape (num_rows, num_cols)
+    diag = jnp.exp(log_diag)  # shape (num_rows, num_cols)
+
+    diag = diag.reshape(dims[0] * dims[1])
+
+    # 2. construct the block encoding of |i>|j> -> sin(B_{ij}) |i>|j> using LCU
+    # we use the circuit S_a X_a H_a (c_a^1 U^\dagger) (c_a^0 U) X_a H_a T_a
+    # where a is the ancilla and S = [[-i, 0], [0, 1]], T = [[1, 0], [0, -i]]
+    # analytic calculation shows that the resulting block encoding is
+    # [[ (U - U^\dagger)/(2i),  (U + U^\dagger)/2     ],
+    #  [ (U + U^\dagger)/2   , -(U - U^\dagger)/(2i) ]]
+    # which is a Hermitian block encoding of sin(B) with one ancilla qubit
+    # Note again that this is compatible with quantum oracle sketching,
+    # since we can implement the c^0U and c^1U† unitaries simultaneously
+    # using the same samples.
+
+    sin = (diag - diag.conj()) / (2j)
+
+    # return only the diagonal of the relevant block
+    return sin, num_samples
 
 
 """
@@ -296,6 +357,38 @@ def _test_q_oracle_sketch_boolean(key):
     print(f"Total number of samples used: {num_samples:.3e}")
 
 
+def _test_q_oracle_sketch_matrix_element(key):
+    print("-" * 10)
+    print("Testing quantum oracle sketching for matrix element oracle...")
+    # random matrix
+    N1 = 1000
+    N2 = 10000
+    num_samples = int(1e6)
+
+    print(f"Testing matrix with dimension N1 = {N1:.2e}, N2 = {N2:.2e}")
+    print(
+        f"Note that the oracle has dimension (N1*N2) x (N1*N2) = {(N1 * N2):.2e} x {(N1 * N2):.2e}"
+    )
+
+    key, subkey = random.split(key)
+    A = random.normal(subkey, (N1, N2), dtype=real_dtype)
+    A = A / jnp.linalg.norm(A)
+
+    start_time = time.time()
+
+    oracle_diag, num_samples = q_oracle_sketch_matrix_element(A, num_samples)
+
+    end_time = time.time()
+
+    print(f"Oracle construction time: {end_time - start_time:.3e} seconds")
+
+    target_diag = A.reshape(N1 * N2)
+    error = jnp.max(jnp.abs(oracle_diag - target_diag))
+    print(f"Matrix reconstruction error in spectral norm: {error:.3e}")
+    assert jnp.isclose(error, 0, atol=1e-1)
+    print(f"Total number of samples used: {num_samples:.3e}")
+
+
 if __name__ == "__main__":
     key = random.PRNGKey(0)
 
@@ -304,6 +397,8 @@ if __name__ == "__main__":
     _test_q_state_sketch(key)
 
     _test_q_oracle_sketch_boolean(key)
+
+    _test_q_oracle_sketch_matrix_element(key)
 
     print("-" * 10)
     print("All tests passed.")
