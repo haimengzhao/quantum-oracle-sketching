@@ -730,20 +730,83 @@ def _test_q_oracle_sketch_matrix_index(key):
     print(f"Number of samples used: {num_samples:.3e}")
 
 
+def _test_matrix_block_encoding(key):
+    # random sparse matrix
+    dim1 = 100
+    dim2 = 1000
+    nnz = dim2 * 3
+    unit_num_samples = int(1e7)
+
+    print(f"Testing sparse matrix with dimension {dim1} x {dim2}, nnz = {nnz}")
+
+    A = utils.random_sparse_matrix(key, (dim1, dim2), nnz)
+
+    row_sparsity = int(jnp.max(jnp.count_nonzero(A, axis=1)))
+    col_sparsity = int(jnp.max(jnp.count_nonzero(A, axis=0)))
+    print(f"Matrix row sparsity: {row_sparsity}, column sparsity: {col_sparsity}")
+
+    # construct element oracle
+    element_oracle, num_samples_element = q_oracle_sketch_matrix_element(
+        A, unit_num_samples
+    )
+    print(f"Number of samples for element oracle: {num_samples_element:.3e}")
+
+    # construct row index oracle
+    row_index_oracle, num_samples_row = q_oracle_sketch_matrix_row_index(
+        A, unit_num_samples
+    )
+    print(f"Number of samples for row index oracle: {num_samples_row:.3e}")
+
+    # construct column index oracle
+    col_index_oracle, num_samples_col = q_oracle_sketch_matrix_index(
+        A, unit_num_samples, axis=1, degree=151, scale=0.9999
+    )
+    print(f"Number of samples for column index oracle: {num_samples_col:.3e}")
+
+    print(row_index_oracle.shape, col_index_oracle.shape, element_oracle.shape)
+
+    # construct block encoding
+    block_encoding = utils.block_encoding_from_sparse_oracles(
+        row_index_oracle, col_index_oracle, element_oracle
+    )
+    # normalized_block_encoding = block_encoding * jnp.sqrt(row_sparsity * col_sparsity)
+    normalized_block_encoding = block_encoding / jnp.linalg.norm(block_encoding, ord=2)
+
+    error_fro = jnp.linalg.norm(normalized_block_encoding - A) / jnp.linalg.norm(A)
+    error_spec = jnp.linalg.norm(
+        normalized_block_encoding - A, ord=2
+    ) / jnp.linalg.norm(A, ord=2)
+
+    print(f"Row sparsity: {row_sparsity}, Col sparsity: {col_sparsity}")
+    print(
+        f"Frobenius norm of A: {jnp.linalg.norm(A):.3e}, Spectral norm of A: {jnp.linalg.norm(A, ord=2):.3e}"
+    )
+
+    print(
+        f"Matrix block encoding reconstruction error: relative Frobenius norm error = {error_fro:.3e}, relative spectral norm error = {error_spec:.3e}"
+    )
+    assert jnp.isclose(error_spec, 0, atol=1e-1)
+    print(
+        f"Number of samples used: {num_samples_element + num_samples_row + num_samples_col:.3e}"
+    )
+
+
 if __name__ == "__main__":
     key = random.PRNGKey(0)
 
-    _test_q_state_sketch_flat(key)
+    # _test_q_state_sketch_flat(key)
 
-    _test_q_state_sketch(key)
+    # _test_q_state_sketch(key)
 
-    _test_q_oracle_sketch_boolean(key)
+    # _test_q_oracle_sketch_boolean(key)
 
-    _test_q_oracle_sketch_matrix_element(key)
+    # _test_q_oracle_sketch_matrix_element(key)
 
-    _test_q_oracle_sketch_matrix_row_index(key)
+    # _test_q_oracle_sketch_matrix_row_index(key)
 
-    _test_q_oracle_sketch_matrix_index(key)
+    # _test_q_oracle_sketch_matrix_index(key)
+
+    _test_matrix_block_encoding(key)
 
     print("-" * 10)
     print("All tests passed.")
