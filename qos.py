@@ -62,8 +62,7 @@ def q_state_sketch(vector, key, unit_num_samples, degree=4):
         vector: array of shape (dim,), the input vector
         key: jax.random.PRNGKey, random key for generating random signs
         unit_num_samples: int, number of samples to use in each sketch
-        degree: even int, degree of the polynomial approximation for arcsin(x),
-            default 4, data size should be a multiple of degree
+        degree: even int, degree of the polynomial approximation for arcsin(x), default 4
     Returns:
         (state, num_samples): quantum state sketch as an array of shape (dim,) and the number of samples used
 
@@ -171,6 +170,33 @@ def q_state_sketch(vector, key, unit_num_samples, degree=4):
     return state, unit_num_samples * (angle_set.shape[0] - 1)
 
 
+def q_oracle_sketch_boolean(truth_table, num_samples):
+    """
+    Construct the quantum oracle sketch of a boolean function.
+
+    Use 0 ancilla qubit.
+
+    Args:
+        truth_table: array of shape (dim,), the truth table of the boolean function
+        num_samples: int, number of samples to use in the sketch
+    Returns:
+        (diagonal, num_samples): diagonal of the phase oracle sketch as an array of shape (dim,)
+            and the number of samples used
+    """
+    dim = truth_table.shape[0]
+
+    prob = jnp.ones_like(truth_table, dtype=real_dtype) / dim
+    t = jnp.pi * dim
+
+    # expected single gate
+    log_diag = jnp.log1p(prob * jnp.expm1(1j * t / num_samples * truth_table))
+    # concatenate all gates
+    log_diag = num_samples * log_diag
+    diag = jnp.exp(log_diag)
+
+    return diag, num_samples
+
+
 """
 Tests
 """
@@ -249,12 +275,35 @@ def _test_q_state_sketch(key):
     print(f"Total number of samples used: {num_samples:.3e}")
 
 
+def _test_q_oracle_sketch_boolean(key):
+    print("-" * 10)
+    print("Testing quantum oracle sketching for Boolean functions...")
+    # random boolean function
+    N = 1000
+    num_samples = int(1e7)
+
+    print(f"Testing boolean function with dimension N = {N:.2e}")
+
+    f = random.randint(key, (N,), minval=0, maxval=2, dtype=int_dtype)
+
+    diag, num_samples = q_oracle_sketch_boolean(f, num_samples)
+
+    # test reconstruction
+    target_diag = jnp.exp(1j * jnp.pi * f)
+    error = jnp.max(jnp.abs(diag - target_diag))
+    print(f"Boolean function phase oracle error in spectral norm: {error:.3e}")
+    assert jnp.allclose(error, 0, atol=1e-1)
+    print(f"Total number of samples used: {num_samples:.3e}")
+
+
 if __name__ == "__main__":
     key = random.PRNGKey(0)
 
     _test_q_state_sketch_flat(key)
 
     _test_q_state_sketch(key)
+
+    _test_q_oracle_sketch_boolean(key)
 
     print("-" * 10)
     print("All tests passed.")
