@@ -794,17 +794,17 @@ def _test_matrix_block_encoding(key):
 if __name__ == "__main__":
     key = random.PRNGKey(0)
 
-    # _test_q_state_sketch_flat(key)
+    _test_q_state_sketch_flat(key)
 
-    # _test_q_state_sketch(key)
+    _test_q_state_sketch(key)
 
-    # _test_q_oracle_sketch_boolean(key)
+    _test_q_oracle_sketch_boolean(key)
 
-    # _test_q_oracle_sketch_matrix_element(key)
+    _test_q_oracle_sketch_matrix_element(key)
 
-    # _test_q_oracle_sketch_matrix_row_index(key)
+    _test_q_oracle_sketch_matrix_row_index(key)
 
-    # _test_q_oracle_sketch_matrix_index(key)
+    _test_q_oracle_sketch_matrix_index(key)
 
     _test_matrix_block_encoding(key)
 
