@@ -258,6 +258,88 @@ def q_oracle_sketch_matrix_element(matrix, num_samples):
     return sin, num_samples
 
 
+def q_oracle_sketch_matrix_row_index(matrix, num_samples):
+    """
+    Construct a block encoding of
+    the sparse row index oracle |i>|k>|0> -> |i>|k>|j(i, k)>,
+    where j(i, k) is the column index of the k-th non-zero element in row i,
+    when the data are random rows of the matrix.
+
+    Use 2 ancilla qubits.
+
+    The index register is padded to the next power of 2 internally to support binary representation.
+
+    Args:
+        matrix: array of shape (num_rows, num_cols), the input matrix with row sparsity 'sparsity'
+        num_samples: int, number of samples to use in the sketch
+
+    Returns:
+        (oracle, num_samples): the oracle as an array of shape (num_rows, sparsity, num_cols),
+            where sparsity is the row sparsity of the matrix; and the number of samples used
+    """
+
+    dims = matrix.shape
+    sparsity = int(jnp.max(jnp.count_nonzero(matrix, axis=1)))
+
+    bitlength_col = int(jnp.ceil(jnp.log2(dims[1])))
+
+    # 0. Calculate the binary representation of j(i, k)_m
+    # non-zero column indices for each row
+    nz_col_indices = jnp.argsort(matrix != 0, axis=1, descending=True)[
+        :, :sparsity
+    ]  # shape (dims[0], sparsity)
+
+    bit_positions = jnp.arange(bitlength_col - 1, -1, -1)
+    col_bits = (
+        nz_col_indices[..., None] >> bit_positions
+    ) & 1  # shape (dims[0], sparsity, bitlength_col)
+
+    # 1. Construct the controlled phase oracle
+    # |i>|k>|1>_m -> (-1)^{j(i, k)_m} |i>|k>|1>_m
+    # for each bit m of the column index j(i, k)
+    # this is done simultaneously for all m with the same samples
+    t = jnp.pi * dims[0]
+    prob = jnp.ones((dims[0],), dtype=real_dtype) / (dims[0])
+
+    # expected single gate
+    log_diag = jnp.log1p(
+        prob[:, None, None] * jnp.expm1(1j * t / num_samples * col_bits)
+    )  # shape (dims[0], sparsity, bitlength_col)
+    # concatenate all gates
+    log_diag = num_samples * log_diag  # shape (dims[0], sparsity, bitlength_col)
+    diag = jnp.exp(log_diag)  # shape (dims[0], sparsity, bitlength_col)
+
+    controlled_diag = jnp.stack(
+        [jnp.ones_like(diag), diag], axis=-1
+    )  # shape (dims[0], sparsity, bitlength_col, 2)
+
+    # 2. Convert to XOR oracle
+    # |i>|k>|0>_m -> |i>|k>|j(i, k)_m>_m
+    hadamard = jnp.array([[1, 1], [1, -1]], dtype=real_dtype) / jnp.sqrt(2)
+    xor_oracle = jnp.einsum(
+        "am,ijkm,mn->ijkan",
+        hadamard,
+        controlled_diag,
+        hadamard,
+    )  # shape (dims[0], sparsity, bitlength_col, 2, 2)
+
+    # 3. Construct the index oracle by applying the XOR oracle to |0^n>_{m's}
+    # tensor product over all bits to get the full index state
+    state = xor_oracle[:, :, 0, :, 0]  # shape (dims[0], sparsity, 2)
+    for bit in range(1, bitlength_col):
+        state = jnp.einsum(
+            "ija,ijb->ijab",
+            state,
+            xor_oracle[:, :, bit, :, 0],
+        )  # shape (dims[0], sparsity, 2^(bit-1), 2)
+        state = state.reshape(dims[0], sparsity, -1)  # shape (dims[0], sparsity, 2^bit)
+    state = state.reshape(dims[0], sparsity, -1)  # shape (dims[0], sparsity, num_cols)
+
+    state = state[:, :, : dims[1]]  # truncate to original size
+
+    return state, num_samples
+
+
 """
 Tests
 """
@@ -364,15 +446,13 @@ def _test_q_oracle_sketch_matrix_element(key):
     N1 = 1000
     N2 = 10000
     num_samples = int(1e6)
+    nnz = N1 * 3
+    A = utils.random_sparse_matrix(key, (N1, N2), nnz)
 
     print(f"Testing matrix with dimension N1 = {N1:.2e}, N2 = {N2:.2e}")
     print(
         f"Note that the oracle has dimension (N1*N2) x (N1*N2) = {(N1 * N2):.2e} x {(N1 * N2):.2e}"
     )
-
-    key, subkey = random.split(key)
-    A = random.normal(subkey, (N1, N2), dtype=real_dtype)
-    A = A / jnp.linalg.norm(A)
 
     start_time = time.time()
 
@@ -389,6 +469,47 @@ def _test_q_oracle_sketch_matrix_element(key):
     print(f"Total number of samples used: {num_samples:.3e}")
 
 
+def _test_q_oracle_sketch_matrix_row_index(key):
+    print("-" * 10)
+    print("Testing quantum oracle sketching for matrix row index oracle...")
+    # random sparse matrix
+    dim1 = 1000
+    dim2 = 10000
+    nnz = dim2 * 3
+    num_samples = int(1e7)
+
+    print(f"Testing sparse matrix with dimension {dim1} x {dim2}, nnz = {nnz}")
+
+    A = utils.random_sparse_matrix(key, (dim1, dim2), nnz)
+    row_counts = jnp.sum(A != 0, axis=1)
+    row_sparsity = int(jnp.max(row_counts))
+
+    print(f"Matrix row sparsity: {row_sparsity}")
+    print("Matrix row sparsity distribution:", jnp.bincount(row_counts))
+
+    start_time = time.time()
+
+    index_oracle, num_samples = q_oracle_sketch_matrix_row_index(A, num_samples)
+
+    end_time = time.time()
+    print(f"Index oracle construction time: {end_time - start_time:.3e} seconds")
+
+    col_mask = A != 0
+    col_indices = jnp.arange(dim2)
+    expected_cols = jnp.where(col_mask, col_indices, dim2)
+    expected_cols = jnp.sort(expected_cols, axis=1)[:, :row_sparsity]
+
+    pred = jnp.argmax(jnp.abs(index_oracle), axis=-1)
+    valid = jnp.arange(row_sparsity)[None, :] < row_counts[:, None]
+
+    assert jnp.all((pred == expected_cols) | ~valid)
+    print("Index reconstruction correct.")
+
+    pred_value = jnp.take_along_axis(index_oracle, pred[..., None], axis=-1)[..., 0]
+    error = jnp.max(jnp.where(valid, jnp.abs(1.0 - pred_value), 0.0))
+    print(f"Matrix row index oracle reconstruction error: {error:.3e}")
+
+
 if __name__ == "__main__":
     key = random.PRNGKey(0)
 
@@ -399,6 +520,8 @@ if __name__ == "__main__":
     _test_q_oracle_sketch_boolean(key)
 
     _test_q_oracle_sketch_matrix_element(key)
+
+    _test_q_oracle_sketch_matrix_row_index(key)
 
     print("-" * 10)
     print("All tests passed.")

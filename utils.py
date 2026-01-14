@@ -26,6 +26,26 @@ def infidelity(state1, state2):
     return 1 - fidelity
 
 
+def random_sparse_matrix(key, shape, nnz):
+    """Generate a unit spectral norm random sparse matrix
+    with given shape and number of non-zero elements."""
+    dim1, dim2 = shape
+
+    key, subkey = random.split(key)
+    row_indices = random.randint(subkey, (nnz,), 0, dim1, dtype=int_dtype)
+
+    key, subkey = random.split(key)
+    col_indices = random.randint(subkey, (nnz,), 0, dim2, dtype=int_dtype)
+
+    key, subkey = random.split(key)
+    values = random.normal(subkey, (nnz,), dtype=real_dtype)
+
+    A = jnp.zeros((dim1, dim2)).at[row_indices, col_indices].set(values)
+    A = A / jnp.linalg.norm(A, ord=2)
+
+    return A
+
+
 def unnormalized_hadamard_transform(n):
     H = jnp.array([[1.0, 1.0], [1.0, -1.0]], dtype=real_dtype)
     H_n = H

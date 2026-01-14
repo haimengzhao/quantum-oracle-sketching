@@ -697,7 +697,7 @@ def _test_q_oracle_sketch_matrix_element(key):
 
     key, subkey = random.split(key)
     A = random.normal(subkey, (N1, N2), dtype=real_dtype)
-    A = A / jnp.linalg.norm(A)
+    A = A / jnp.linalg.norm(A, ord=2)
 
     data_gen = matrix_data(A)
     num_samples = int(1e8)
