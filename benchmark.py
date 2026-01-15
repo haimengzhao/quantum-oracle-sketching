@@ -37,6 +37,7 @@ plt.rcParams.update(
     }
 )
 
+# arcsin QSVT for general state sketching
 arcsin_degree = 20
 arcsin_angle_set = qsvt.get_qsvt_angles(
     func=lambda x: jnp.arcsin(x) / jnp.arcsin(1),
@@ -48,6 +49,7 @@ arcsin_angle_set = qsvt.get_qsvt_angles(
 )
 target_norm = 1 / (jnp.arcsin(1) * 5)
 
+# vectorized versions of qos functions
 q_state_sketch_vectorized = jax.vmap(
     partial(qos.q_state_sketch, angle_set=arcsin_angle_set, degree=arcsin_degree),
     in_axes=(0, 0, None),
@@ -60,6 +62,10 @@ q_state_sketch_flat_vectorized = jax.vmap(
 
 q_oracle_sketch_boolean_vectorized = jax.vmap(
     qos.q_oracle_sketch_boolean, in_axes=(0, None), out_axes=(0, 0)
+)
+
+q_oracle_sketch_matrix_element_vectorized = jax.vmap(
+    qos.q_oracle_sketch_matrix_element, in_axes=(0, None), out_axes=(0, 0)
 )
 
 
@@ -135,7 +141,42 @@ def benchmark_random_boolean_function(key, dim, unit_num_samples, repetition=10)
     }
 
 
-def benchmark(key, benchmark_function, dim_list, unit_num_samples_list, repetition):
+def benchmark_random_sparse_matrix_element(
+    key, dim, nnz, unit_num_samples, repetition=10
+):
+    key, subkey = random.split(key)
+    sparse_matrix = utils.random_sparse_matrix_constant_magnitude(
+        subkey, (dim, dim), nnz=nnz, magnitude=1, batch_size=repetition
+    )
+
+    oracle_sketch, num_samples = q_oracle_sketch_matrix_element_vectorized(
+        sparse_matrix, unit_num_samples
+    )
+
+    target_oracle = sparse_matrix.reshape(repetition, -1)
+
+    # operator norm error of diagonal matrices
+    error = jnp.max(jnp.abs(oracle_sketch - target_oracle), axis=-1)
+    error_mean = jnp.mean(error)
+    error_std = jnp.std(error) / jnp.sqrt(repetition)
+    num_samples = jnp.mean(num_samples)
+
+    return {
+        "error_mean": error_mean,
+        "error_std": error_std,
+        "num_samples": num_samples,
+    }
+
+
+def benchmark(
+    key,
+    benchmark_function,
+    dim_list,
+    unit_num_samples_list,
+    repetition,
+    matrix_dim=None,
+    verbose=False,
+):
     results = {}
     for dim in tqdm(dim_list, desc="Dimensions", position=0):
         results[int(dim)] = {}
@@ -143,14 +184,23 @@ def benchmark(key, benchmark_function, dim_list, unit_num_samples_list, repetiti
             unit_num_samples_list, desc="Num Samples", position=1, leave=False
         ):
             key, subkey = random.split(key)
-            res = benchmark_function(subkey, dim, unit_num_samples, repetition)
+            if matrix_dim is not None:
+                # when benchmarking sparse matrix
+                # dim here refers to nnz
+                res = benchmark_function(
+                    subkey, matrix_dim, dim, unit_num_samples, repetition
+                )
+            else:
+                res = benchmark_function(subkey, dim, unit_num_samples, repetition)
             results[int(dim)][int(unit_num_samples)] = res
-            tqdm.write(", ".join([f"{f}: {res[f]:3e}" for f in res.keys()]))
+
+            if verbose:
+                tqdm.write(", ".join([f"{f}: {res[f]:3e}" for f in res.keys()]))
     return results
 
 
 def plot_benchmark_results(
-    results, title, dim_list=None, fit=None, save_path=None, show=False
+    results, title, dim_list=None, matrix=False, fit=None, save_path=None, show=False
 ):
     plt.figure(figsize=(4, 3))
 
@@ -171,8 +221,8 @@ def plot_benchmark_results(
             error_mean_list,
             yerr=error_std_list,
             fmt="o",
-            label=f"$N = {dim}$",
-            color=f"C{color_counter}",
+            label=rf"$N = {dim}$" if not matrix else f"$N_{{nnz}} = {dim}$",
+            color=rf"C{color_counter}",
             capsize=5,
         )
         if fit is not None:
@@ -191,7 +241,10 @@ def plot_benchmark_results(
 
     fit_handles = None
     if fit is not None:
-        label_str = rf"Fit: $M = {fit['C']:.1f} N^{{{fit['alpha']:.2f}}}/\epsilon^{{{fit['beta']:.2f}}}$"
+        if matrix:
+            label_str = rf"Fit: $M = {fit['C']:.1f} N_{{nnz}}^{{{fit['alpha']:.2f}}}/\epsilon^{{{fit['beta']:.2f}}}$"
+        else:
+            label_str = rf"Fit: $M = {fit['C']:.1f} N^{{{fit['alpha']:.2f}}}/\epsilon^{{{fit['beta']:.2f}}}$"
         rmse_str = rf"RMS rel. err.: ${fit['rmse'] * 100:.1f}\%$"
         fit_handles = [
             Line2D([], [], color="grey", linestyle="-", label=label_str),
@@ -275,6 +328,7 @@ if __name__ == "__main__":
     key = random.PRNGKey(42)
 
     # 1. benchmark flat vector quantum state sketch
+    print("-" * 40)
     print("Benchmarking quantum state sketch for flat vectors...")
     dim_list = 100 * jnp.arange(1, 11)
     unit_num_samples_list = (10 ** jnp.linspace(5, 8, num=10)).astype(int)
@@ -297,10 +351,11 @@ if __name__ == "__main__":
     )
 
     # 2. benchmark general vector quantum state sketch
+    print("-" * 40)
     print("Benchmarking quantum state sketch for general vectors...")
     # general quantum state sketch works internally by padding dimension to next power of 2
     # so to fit the sample complexity correctly we use dimensions that are powers of 2
-    dim_list = jnp.array([64, 128, 256, 512, 1024, 2048])
+    dim_list = 100 * jnp.arange(1, 11)
     unit_num_samples_list = (10 ** jnp.linspace(5, 8, num=10)).astype(int)
     repetition = 10
     print("Dimensions:", dim_list)
@@ -315,12 +370,13 @@ if __name__ == "__main__":
     plot_benchmark_results(
         results,
         "Quantum State Sketching: General Vector",
-        dim_list=[128, 256, 512, 1024],
+        dim_list=[100, 200, 500, 1000],
         fit=fit,
         save_path="general_vector_benchmark.pdf",
     )
 
     # 3. benchmark boolean function oracle sketch
+    print("-" * 40)
     print("Benchmarking oracle sketch for boolean functions...")
     dim_list = 100 * jnp.arange(1, 11)
     unit_num_samples_list = (10 ** jnp.linspace(5, 8, num=10)).astype(int)
@@ -344,4 +400,33 @@ if __name__ == "__main__":
         dim_list=[100, 200, 500, 1000],
         fit=fit,
         save_path="boolean_function_benchmark.pdf",
+    )
+
+    # 4. benchmark sparse matrix element oracle sketch
+    print("-" * 40)
+    print("Benchmarking oracle sketch for sparse matrix element oracle...")
+    dim = 100
+    nnz_list = jnp.array([200, 300, 400, 500, 600, 800, 1000, 1200, 1500, 2000])
+    unit_num_samples_list = (10 ** jnp.linspace(5, 8, num=10)).astype(int)
+    repetition = 200
+    print(f"Dimensions (square matrix): {dim} x {dim}, NNZ: ", nnz_list)
+    print("Number of samples:", unit_num_samples_list)
+    print("Repetitions:", repetition)
+    results = benchmark(
+        key,
+        benchmark_random_sparse_matrix_element,
+        nnz_list,
+        unit_num_samples_list,
+        repetition,
+        matrix_dim=dim,
+    )
+    fit = fit_sample_complexity(results)
+
+    plot_benchmark_results(
+        results,
+        "Quantum Oracle Sketching: Sparse Matrix Element",
+        dim_list=[200, 500, 1000, 2000],
+        fit=fit,
+        save_path="sparse_matrix_element_benchmark.pdf",
+        matrix=True,
     )

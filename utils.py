@@ -42,22 +42,60 @@ def random_flat_vector(key, dim, batch_size=1):
     return vec
 
 
-def random_sparse_matrix(key, shape, nnz):
-    """Generate a unit spectral norm random sparse matrix
-    with given shape and number of non-zero elements."""
+def random_sparse_matrix(key, shape, nnz, batch_size=1):
+    """Generate a batch of unit spectral norm random sparse matrices
+    with given shape and number of non-zero elements.
+
+    Note that its matrix elements have magnitudes scaling as O(1/sqrt(nnz))."""
     dim1, dim2 = shape
 
     key, subkey = random.split(key)
-    row_indices = random.randint(subkey, (nnz,), 0, dim1, dtype=int_dtype)
+    row_indices = random.randint(subkey, (batch_size, nnz), 0, dim1, dtype=int_dtype)
 
     key, subkey = random.split(key)
-    col_indices = random.randint(subkey, (nnz,), 0, dim2, dtype=int_dtype)
+    col_indices = random.randint(subkey, (batch_size, nnz), 0, dim2, dtype=int_dtype)
 
     key, subkey = random.split(key)
-    values = random.normal(subkey, (nnz,), dtype=real_dtype)
+    values = random.normal(subkey, (batch_size, nnz), dtype=real_dtype)
 
-    A = jnp.zeros((dim1, dim2)).at[row_indices, col_indices].set(values)
-    A = A / jnp.linalg.norm(A, ord=2)
+    A = jnp.zeros((batch_size, dim1, dim2), dtype=real_dtype)
+    A = A.at[jnp.arange(batch_size)[:, None], row_indices, col_indices].set(values)
+    A = A / jnp.linalg.norm(A, ord=2, axis=(-2, -1), keepdims=True)
+
+    if batch_size == 1:
+        A = A[0]
+
+    return A
+
+
+def random_sparse_matrix_constant_magnitude(key, shape, nnz, magnitude, batch_size=1):
+    """Generate a batch of random sparse matrices with the given
+    shape and number of non-zero elements.
+
+    All non-zero elements have roughly the same magnitude scale.
+
+    The magnitude usually should scale ~sqrt(sqrt(dim1 * dim2) / nnz)
+    to ensure the spectral norm is bounded by one. Otherwise,
+    the spectral norm can be larger than one.
+    """
+    dim1, dim2 = shape
+
+    key, subkey = random.split(key)
+    row_indices = random.randint(subkey, (batch_size, nnz), 0, dim1, dtype=int_dtype)
+
+    key, subkey = random.split(key)
+    col_indices = random.randint(subkey, (batch_size, nnz), 0, dim2, dtype=int_dtype)
+
+    key, subkey = random.split(key)
+    values = random.uniform(
+        subkey, (batch_size, nnz), minval=-magnitude, maxval=magnitude, dtype=real_dtype
+    )
+
+    A = jnp.zeros((batch_size, dim1, dim2), dtype=real_dtype)
+    A = A.at[jnp.arange(batch_size)[:, None], row_indices, col_indices].set(values)
+
+    if batch_size == 1:
+        A = A[0]
 
     return A
 
@@ -226,3 +264,11 @@ if __name__ == "__main__":
     # block encoding
     A3 = get_block_encoded(V, num_ancilla=2)
     print(jnp.isclose(jnp.linalg.norm(A - A3), 0, atol=1e-5))  # Should be close to 0
+
+    # random sparse matrix
+    dim1 = 100
+    dim2 = 1000
+    nnz = dim2 * 5
+    A_sparse = random_sparse_matrix(key, (dim1, dim2), nnz)
+    print(jnp.count_nonzero(A_sparse))
+    print(jnp.isclose(nnz - jnp.count_nonzero(A_sparse), 0, atol=1e-5))

@@ -74,11 +74,13 @@ def q_state_sketch(vector, key, unit_num_samples, angle_set=None, degree=4):
     """
     orig_dim = vector.shape[0]
     dim = int(2 ** jnp.ceil(jnp.log2(vector.shape[0])))
+    prob = jnp.ones_like(vector, dtype=real_dtype) / orig_dim
+
     vector = jnp.pad(
         vector, (0, int(dim) - orig_dim), mode="constant", constant_values=0
     )
+    prob = jnp.pad(prob, (0, int(dim) - orig_dim), mode="constant", constant_values=0)
     norm = jnp.linalg.norm(vector)
-    prob = jnp.ones_like(vector, dtype=real_dtype) / dim
 
     # random sign O_h
     key, subkey = random.split(key)
@@ -105,7 +107,7 @@ def q_state_sketch(vector, key, unit_num_samples, angle_set=None, degree=4):
     inner_prod_signs = 1 - 2 * bit_inner_product  # shape (dim, dim)
 
     # 4. Concatenate expected single gate
-    t = dim / norm / 5
+    t = orig_dim / norm / 5
     log_diag = jnp.log1p(
         jnp.sum(
             prob[:, None]
@@ -232,7 +234,7 @@ def q_oracle_sketch_matrix_element(matrix, unit_num_samples):
 
     # prob is uniform over all non-zero elements
     prob = jnp.zeros_like(matrix, dtype=real_dtype)
-    prob = prob.at[matrix != 0].set(1.0 / nnz)
+    prob = jnp.where(matrix != 0, 1.0 / nnz, 0.0)
 
     # expected single gate
     log_diag = jnp.log1p(
