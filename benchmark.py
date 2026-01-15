@@ -46,6 +46,7 @@ arcsin_angle_set = qsvt.get_qsvt_angles(
     ensure_bounded=False,
     parity=1,
 )
+target_norm = 1 / (jnp.arcsin(1) * 5)
 
 q_state_sketch_vectorized = jax.vmap(
     partial(qos.q_state_sketch, angle_set=arcsin_angle_set, degree=arcsin_degree),
@@ -55,6 +56,10 @@ q_state_sketch_vectorized = jax.vmap(
 
 q_state_sketch_flat_vectorized = jax.vmap(
     qos.q_state_sketch_flat, in_axes=(0, None), out_axes=(0, 0)
+)
+
+q_oracle_sketch_boolean_vectorized = jax.vmap(
+    qos.q_oracle_sketch_boolean, in_axes=(0, None), out_axes=(0, 0)
 )
 
 
@@ -67,7 +72,6 @@ def benchmark_random_vector(key, dim, unit_num_samples, repetition=10):
         vector, keys, unit_num_samples
     )
     norm = jnp.linalg.norm(state_sketch, axis=-1)
-    target_norm = 1 / (jnp.arcsin(1) * 5)
 
     error = jnp.linalg.norm(state_sketch - vector * target_norm, axis=-1)
     error_mean = jnp.mean(error)
@@ -108,6 +112,29 @@ def benchmark_random_flat_vector(key, dim, unit_num_samples, repetition=10):
     }
 
 
+def benchmark_random_boolean_function(key, dim, unit_num_samples, repetition=10):
+    key, subkey = random.split(key)
+    truth_table = random.randint(
+        key, (repetition, dim), minval=0, maxval=2, dtype=utils.int_dtype
+    )
+
+    oracle_sketch, num_samples = q_oracle_sketch_boolean_vectorized(
+        truth_table, unit_num_samples
+    )
+
+    target_diag = jnp.exp(1j * jnp.pi * truth_table)
+    error = jnp.max(jnp.abs(oracle_sketch - target_diag), axis=-1)
+    error_mean = jnp.mean(error)
+    error_std = jnp.std(error) / jnp.sqrt(repetition)
+    num_samples = jnp.mean(num_samples)
+
+    return {
+        "error_mean": error_mean,
+        "error_std": error_std,
+        "num_samples": num_samples,
+    }
+
+
 def benchmark(key, benchmark_function, dim_list, unit_num_samples_list, repetition):
     results = {}
     for dim in tqdm(dim_list, desc="Dimensions", position=0):
@@ -125,8 +152,7 @@ def benchmark(key, benchmark_function, dim_list, unit_num_samples_list, repetiti
 def plot_benchmark_results(
     results, title, dim_list=None, fit=None, save_path=None, show=False
 ):
-    fig = plt.figure(figsize=(4, 3))
-    ax = plt.gca()
+    plt.figure(figsize=(4, 3))
 
     color_counter = 0
     for dim, dim_results in results.items():
@@ -144,9 +170,10 @@ def plot_benchmark_results(
             num_samples_list,
             error_mean_list,
             yerr=error_std_list,
-            fmt="o-",
+            fmt="o",
             label=f"$N = {dim}$",
             color=f"C{color_counter}",
+            capsize=5,
         )
         if fit is not None:
             # Plot fitted curve for this dimension
@@ -157,7 +184,7 @@ def plot_benchmark_results(
             plt.plot(
                 num_samples_fit,
                 error_fit,
-                "--",
+                "-",
                 color=f"C{color_counter}",
             )
             color_counter += 1
@@ -167,7 +194,7 @@ def plot_benchmark_results(
         label_str = rf"Fit: $M = {fit['C']:.1f} N^{{{fit['alpha']:.2f}}}/\epsilon^{{{fit['beta']:.2f}}}$"
         rmse_str = rf"RMS rel. err.: ${fit['rmse'] * 100:.1f}\%$"
         fit_handles = [
-            Line2D([], [], color="grey", linestyle="--", label=label_str),
+            Line2D([], [], color="grey", linestyle="-", label=label_str),
             Line2D([], [], color="none", label=rmse_str),
         ]
 
@@ -176,11 +203,14 @@ def plot_benchmark_results(
     plt.xlabel(r"Number of samples $M$")
     plt.ylabel(r"Error $\epsilon$")
     plt.title(title)
-    plt.grid(True)
-    data_legend = ax.legend(loc="upper right")
+    # 1. Turn on Major Grid (Darker)
+    plt.grid(True, which="major", linestyle="-", linewidth=0.8, color="gray", alpha=0.4)
+    # 2. Turn on Minor Grid (Lighter & Subtle)
+    plt.grid(True, which="minor", linestyle=":", linewidth=0.5, color="gray", alpha=0.3)
+    data_legend = plt.legend(loc="upper right")
     if fit_handles is not None:
-        ax.add_artist(data_legend)
-        ax.legend(handles=fit_handles, loc="lower left", handlelength=2)
+        plt.gca().add_artist(data_legend)
+        plt.legend(handles=fit_handles, loc="lower left", handlelength=2)
     plt.tight_layout()
     if save_path is not None:
         plt.savefig(save_path)
@@ -243,10 +273,15 @@ def fit_sample_complexity(results):
 
 if __name__ == "__main__":
     key = random.PRNGKey(42)
-    repetition = 100
 
+    # 1. benchmark flat vector quantum state sketch
+    print("Benchmarking quantum state sketch for flat vectors...")
     dim_list = 100 * jnp.arange(1, 11)
     unit_num_samples_list = (10 ** jnp.linspace(5, 8, num=10)).astype(int)
+    repetition = 100
+    print("Dimensions:", dim_list)
+    print("Number of samples:", unit_num_samples_list)
+    print("Repetitions:", repetition)
 
     results = benchmark(
         key, benchmark_random_flat_vector, dim_list, unit_num_samples_list, repetition
@@ -261,11 +296,16 @@ if __name__ == "__main__":
         save_path="flat_vector_benchmark.pdf",
     )
 
+    # 2. benchmark general vector quantum state sketch
+    print("Benchmarking quantum state sketch for general vectors...")
     # general quantum state sketch works internally by padding dimension to next power of 2
     # so to fit the sample complexity correctly we use dimensions that are powers of 2
     dim_list = jnp.array([64, 128, 256, 512, 1024, 2048])
     unit_num_samples_list = (10 ** jnp.linspace(5, 8, num=10)).astype(int)
     repetition = 10
+    print("Dimensions:", dim_list)
+    print("Number of samples:", unit_num_samples_list)
+    print("Repetitions:", repetition)
 
     results = benchmark(
         key, benchmark_random_vector, dim_list, unit_num_samples_list, repetition
@@ -278,4 +318,30 @@ if __name__ == "__main__":
         dim_list=[128, 256, 512, 1024],
         fit=fit,
         save_path="general_vector_benchmark.pdf",
+    )
+
+    # 3. benchmark boolean function oracle sketch
+    print("Benchmarking oracle sketch for boolean functions...")
+    dim_list = 100 * jnp.arange(1, 11)
+    unit_num_samples_list = (10 ** jnp.linspace(5, 8, num=10)).astype(int)
+    repetition = 100
+    print("Dimensions:", dim_list)
+    print("Number of samples:", unit_num_samples_list)
+    print("Repetitions:", repetition)
+
+    results = benchmark(
+        key,
+        benchmark_random_boolean_function,
+        dim_list,
+        unit_num_samples_list,
+        repetition,
+    )
+    fit = fit_sample_complexity(results)
+
+    plot_benchmark_results(
+        results,
+        "Quantum Oracle Sketching: Boolean Functions",
+        dim_list=[100, 200, 500, 1000],
+        fit=fit,
+        save_path="boolean_function_benchmark.pdf",
     )

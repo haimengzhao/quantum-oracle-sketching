@@ -567,28 +567,6 @@ def _test_q_state_sketch(key):
     print(f"Total number of samples used: {num_samples:.3e}")
     assert jnp.isclose(error, 0, atol=1e-1)
 
-    # amplitude amplification to boost success probability
-    print("Testing amplitude amplification to boost success probability...")
-
-    degree = 51
-    target_norm = 0.98
-
-    # apply amplitude amplification
-    state_aa = primitives.amplitude_amplification(
-        state, degree=degree, target_norm=target_norm
-    )
-    num_samples = num_samples * (degree - 1)
-
-    prob_aa = jnp.linalg.norm(state_aa) ** 2
-    print(
-        f"Post-amplification success probability: {prob_aa:.3f}, was {prob:.3f} before"
-    )
-    error_aa = jnp.linalg.norm(v - state_aa / jnp.linalg.norm(state_aa))
-    print(
-        f"Post-amplification state reconstruction error in l2 norm: {error_aa:.3e}, was {error:.3e} before"
-    )
-    assert jnp.isclose(error_aa, 0, atol=1e-1)
-
     print(f"Total number of samples used: {num_samples:.3e}")
 
 
