@@ -29,6 +29,7 @@ class PolyTaylorSeries(PolyGenerator):
         npts=100,
         max_scale=0.9,
         cheb_domain=(-1, 1),  # ADDED
+        parity=None,  # ADDED
     ):
         # MODIFIED: removed redundant variables chebyshev_basis, cheb_samples
         # Note: PolyTaylorSeries now no longer generates approximating Taylor polynomials, but only Chebyshev interpolations as contained in the assured branch indicated below. This exhibits better stability and convergence.
@@ -48,7 +49,10 @@ class PolyTaylorSeries(PolyGenerator):
 
         # Generate cheb fit for function.
         # ORIGINAL: cheb_coefs = np.polynomial.chebyshev.chebfit(samples, vals, degree)
-        cheb_coefs = np.polynomial.chebyshev.chebfit(samples, vals, degree, w=mask)
+        degree_list = (
+            jnp.arange(parity, degree + 1, 2) if parity is not None else degree
+        )
+        cheb_coefs = np.polynomial.chebyshev.chebfit(samples, vals, degree_list, w=mask)
 
         # Generate chebyshev polynomial object from coefs.
         cheb_poly = np.polynomial.chebyshev.Chebyshev(cheb_coefs)
@@ -90,7 +94,9 @@ class PolyTaylorSeries(PolyGenerator):
             return cheb_poly
 
 
-def get_qsvt_angles(func, degree, rescale, cheb_domain=(-1, 1), ensure_bounded=True):
+def get_qsvt_angles(
+    func, degree, rescale, cheb_domain=(-1, 1), ensure_bounded=True, parity=None
+):
     """
     Get QSVT angles for a given target function.
 
@@ -99,6 +105,8 @@ def get_qsvt_angles(func, degree, rescale, cheb_domain=(-1, 1), ensure_bounded=T
         degree: degree of the polynomial approximation
         rescale: scaling factor to ensure the function is bounded within [-1, 1]
         cheb_domain: domain over which the Chebyshev fit is to be performed, default is (-1, 1)
+        ensure_bounded: whether to ensure the polynomial is bounded within [-1, 1], default True
+        parity: parity of the polynomial, None for automatic determination, 0 for even, 1 for odd, default None
     Returns:
         angle_set: array of QSVT angles
     """
@@ -108,6 +116,7 @@ def get_qsvt_angles(func, degree, rescale, cheb_domain=(-1, 1), ensure_bounded=T
         max_scale=rescale,
         ensure_bounded=ensure_bounded,
         cheb_domain=cheb_domain,
+        parity=parity,
     )
 
     (phi_set, red_phiset, parity) = angle_sequence.QuantumSignalProcessingPhases(
@@ -186,7 +195,6 @@ def get_qsvt_angles_sign(degree, threshold=0.1, rescale=0.9):
         max_scale=rescale,
     )
 
-    pcoefs = np.asarray(pcoefs, dtype=np.float64)
     (phi_set, red_phiset, parity) = angle_sequence.QuantumSignalProcessingPhases(
         pcoefs, method="sym_qsp", chebyshev_basis=True
     )

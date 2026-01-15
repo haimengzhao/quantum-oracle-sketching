@@ -12,11 +12,12 @@ real_dtype = jnp.float64
 def amplitude_amplification(
     unnormalized_state, degree, target_norm=0.9, threshold=None
 ):
-    """Perform amplitude amplification on an unnormalized quantum state.
+    """
+    Perform amplitude amplification on an unnormalized quantum state.
 
     Implicitly increasing num_ancilla by 1.
 
-    Note that we ingnore the garbage blocks from the block encoding
+    Note that we ignore the garbage blocks from the block encoding
     that gives us the unnormalized state, since they never enter the relevant
     subspace for amplitude amplification in quantum oracle sketching + QSVT.
     This is because quantum oracle sketching and QSVT have a fixed circuit

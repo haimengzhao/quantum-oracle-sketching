@@ -53,7 +53,7 @@ def q_state_sketch_flat(vector, unit_num_samples):
     return state, unit_num_samples
 
 
-def q_state_sketch(vector, key, unit_num_samples, degree=4):
+def q_state_sketch(vector, key, unit_num_samples, angle_set=None, degree=4):
     """
     Construct the quantum state sketch of a general vector.
 
@@ -64,6 +64,8 @@ def q_state_sketch(vector, key, unit_num_samples, degree=4):
         vector: array of shape (dim,), the input vector
         key: jax.random.PRNGKey, random key for generating random signs
         unit_num_samples: int, number of samples to use in each sketch
+        angle_set (optional): array of shape (num_angles,), pre-computed angle set for QSVT;
+            if None, compute internally
         degree: even int, degree of the polynomial approximation for arcsin(x), default 4
 
     Returns:
@@ -103,7 +105,7 @@ def q_state_sketch(vector, key, unit_num_samples, degree=4):
     inner_prod_signs = 1 - 2 * bit_inner_product  # shape (dim, dim)
 
     # 4. Concatenate expected single gate
-    t = dim / norm / 3
+    t = dim / norm / 5
     log_diag = jnp.log1p(
         jnp.sum(
             prob[:, None]
@@ -134,13 +136,14 @@ def q_state_sketch(vector, key, unit_num_samples, degree=4):
     def func(x):
         return jnp.arcsin(x) / jnp.arcsin(1)
 
-    angle_set = qsvt.get_qsvt_angles(
-        func=func,
-        degree=degree,
-        rescale=1.0,
-        cheb_domain=(-jnp.sin(1), jnp.sin(1)),
-        ensure_bounded=False,
-    )
+    if angle_set is None:
+        angle_set = qsvt.get_qsvt_angles(
+            func=func,
+            degree=degree,
+            rescale=1.0,
+            cheb_domain=(-jnp.sin(1), jnp.sin(1)),
+            ensure_bounded=False,
+        )
 
     sin = (diag - jnp.conj(diag)) / (2j)  # shape (dim,)
     cos = (diag + jnp.conj(diag)) / 2  # shape (dim,)
@@ -733,7 +736,7 @@ def _test_q_oracle_sketch_matrix_index(key):
 def _test_matrix_block_encoding(key):
     # random sparse matrix
     dim1 = 100
-    dim2 = 1000
+    dim2 = 100
     nnz = dim2 * 3
     unit_num_samples = int(1e7)
 

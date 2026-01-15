@@ -26,6 +26,22 @@ def infidelity(state1, state2):
     return 1 - fidelity
 
 
+def random_unit_vector(key, dim, batch_size=1):
+    """Generate a batch of random real unit vectors of given dimension."""
+    vec = random.normal(key, (batch_size, dim), dtype=real_dtype)
+    vec = vec / jnp.linalg.norm(vec, axis=-1, keepdims=True)
+    return vec
+
+
+def random_flat_vector(key, dim, batch_size=1):
+    """Generate a batch of random flat vectors of given dimension with components ±1."""
+    vec = (
+        random.randint(key, (batch_size, dim), minval=0, maxval=2, dtype=int_dtype) * 2
+        - 1
+    )
+    return vec
+
+
 def random_sparse_matrix(key, shape, nnz):
     """Generate a unit spectral norm random sparse matrix
     with given shape and number of non-zero elements."""
