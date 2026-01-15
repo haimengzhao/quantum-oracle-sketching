@@ -347,7 +347,7 @@ if __name__ == "__main__":
         "Quantum State Sketching: Flat Vector",
         dim_list=[100, 200, 500, 1000],
         fit=fit,
-        save_path="flat_vector_benchmark.pdf",
+        save_path="benchmark_flat_vector.pdf",
     )
 
     # 2. benchmark general vector quantum state sketch
@@ -372,7 +372,7 @@ if __name__ == "__main__":
         "Quantum State Sketching: General Vector",
         dim_list=[100, 200, 500, 1000],
         fit=fit,
-        save_path="general_vector_benchmark.pdf",
+        save_path="benchmark_general_vector.pdf",
     )
 
     # 3. benchmark boolean function oracle sketch
@@ -399,7 +399,7 @@ if __name__ == "__main__":
         "Quantum Oracle Sketching: Boolean Functions",
         dim_list=[100, 200, 500, 1000],
         fit=fit,
-        save_path="boolean_function_benchmark.pdf",
+        save_path="benchmark_boolean_function.pdf",
     )
 
     # 4. benchmark sparse matrix element oracle sketch
@@ -427,6 +427,6 @@ if __name__ == "__main__":
         "Quantum Oracle Sketching: Sparse Matrix Element",
         dim_list=[200, 500, 1000, 2000],
         fit=fit,
-        save_path="sparse_matrix_element_benchmark.pdf",
+        save_path="benchmark_matrix_element.pdf",
         matrix=True,
     )
