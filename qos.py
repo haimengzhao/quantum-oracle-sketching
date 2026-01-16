@@ -346,7 +346,7 @@ def q_oracle_sketch_matrix_row_index(matrix, unit_num_samples):
 
 
 def q_oracle_sketch_matrix_index(
-    matrix, unit_num_samples, axis, degree=101, scale=0.9999
+    matrix, unit_num_samples, axis, degree=101, scale=0.9999, angle_set=None
 ):
     """
     Construct a block encoding of
@@ -367,8 +367,10 @@ def q_oracle_sketch_matrix_index(
         matrix: array of shape (num_rows, num_cols), the input matrix with row or column sparsity 'sparsity'
         unit_num_samples: int, number of samples to use in each sketch
         axis: int, 0 for row index oracle, 1 for column index oracle
-        degree: odd int, degree of the polynomial approximation for sign function in QSVT, default 51
-        scale: float in (0, 1), target magnitude of the sign function, default 0.99
+        degree: odd int, degree of the polynomial approximation for sign function in QSVT, default 101
+        scale: float in (0, 1), target magnitude of the sign function, default 0.9999
+        angle_set (optional): array of shape (num_angles,), pre-computed angle set for QSVT;
+            if None, compute internally
 
     Returns:
         (oracle, num_samples): the oracle as an array of shape (num_rows, sparsity, num_cols)
@@ -443,12 +445,13 @@ def q_oracle_sketch_matrix_index(
     # |i>|k>|l> -> (-1)^{ 1[C(i, l) < k] } |i>|k>|l>
 
     # QSVT setup
-    threshold = jnp.pi / (4 * sparsity + 2) * 0.8
-    print("QSVT sign function threshold:", threshold)
-    angle_set, scale = qsvt.get_qsvt_angles_sign(
-        degree=degree, threshold=threshold, rescale=scale
-    )
-    angle_set = angle_set.astype(real_dtype)
+    if angle_set is None:
+        threshold = jnp.pi / (4 * sparsity + 2) * 0.8
+        print("QSVT sign function threshold:", threshold)
+        angle_set, scale = qsvt.get_qsvt_angles_sign(
+            degree=degree, threshold=threshold, rescale=scale
+        )
+        angle_set = angle_set.astype(real_dtype)
 
     block_encoding = qsvt.apply_qsvt_diag(
         block_encoding, num_ancilla=1, angle_set=angle_set

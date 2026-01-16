@@ -68,6 +68,21 @@ def random_sparse_matrix(key, shape, nnz, batch_size=1):
     return A
 
 
+def laplacian_matrix(dim):
+    """Generate the Laplacian matrix of a 1D chain graph with given dimension with element magnitudes bounded by one."""
+    diagonals = jnp.ones([dim], dtype=real_dtype) * 2.0
+    off_diagonals = jnp.ones([dim - 1], dtype=real_dtype) * (-1.0)
+
+    L = jnp.diag(diagonals)
+    L = L.at[jnp.arange(dim - 1), jnp.arange(1, dim)].set(off_diagonals)
+    L = L.at[jnp.arange(1, dim), jnp.arange(dim - 1)].set(off_diagonals)
+
+    # Normalize the Laplacian matrix to have norm bounded by 1
+    norm = 2
+    L = L / norm
+    return L
+
+
 def random_sparse_matrix_constant_magnitude(key, shape, nnz, magnitude, batch_size=1):
     """Generate a batch of random sparse matrices with the given
     shape and number of non-zero elements.
@@ -89,6 +104,37 @@ def random_sparse_matrix_constant_magnitude(key, shape, nnz, magnitude, batch_si
     key, subkey = random.split(key)
     values = random.uniform(
         subkey, (batch_size, nnz), minval=-magnitude, maxval=magnitude, dtype=real_dtype
+    )
+
+    A = jnp.zeros((batch_size, dim1, dim2), dtype=real_dtype)
+    A = A.at[jnp.arange(batch_size)[:, None], row_indices, col_indices].set(values)
+
+    if batch_size == 1:
+        A = A[0]
+
+    return A
+
+
+def random_sparse_matrix_given_row_sparsity(key, shape, row_sparsity, batch_size=1):
+    """Generate a batch of random sparse matrices with the given
+    shape and row sparsity. All non-zero elements have roughly the same magnitude scale."""
+    dim1, dim2 = shape
+    nnz = dim1 * row_sparsity
+
+    key, subkey = random.split(key)
+    row_indices = jnp.repeat(jnp.arange(dim1, dtype=int_dtype), row_sparsity)
+    row_indices = jnp.tile(row_indices, (batch_size, 1))
+
+    key, subkey = random.split(key)
+    col_indices = jnp.tile(jnp.arange(dim2, dtype=int_dtype), (batch_size, dim1, 1))
+    permuted_col_indices = random.permutation(
+        subkey, col_indices, axis=-1, independent=True
+    )
+    col_indices = permuted_col_indices[:, :, :row_sparsity].reshape(batch_size, nnz)
+
+    key, subkey = random.split(key)
+    values = random.uniform(
+        subkey, (batch_size, nnz), minval=-1, maxval=1, dtype=real_dtype
     )
 
     A = jnp.zeros((batch_size, dim1, dim2), dtype=real_dtype)
@@ -266,9 +312,16 @@ if __name__ == "__main__":
     print(jnp.isclose(jnp.linalg.norm(A - A3), 0, atol=1e-5))  # Should be close to 0
 
     # random sparse matrix
-    dim1 = 100
-    dim2 = 1000
+    dim1 = 10
+    dim2 = 10
     nnz = dim2 * 5
     A_sparse = random_sparse_matrix(key, (dim1, dim2), nnz)
-    print(jnp.count_nonzero(A_sparse))
-    print(jnp.isclose(nnz - jnp.count_nonzero(A_sparse), 0, atol=1e-5))
+    print(jnp.count_nonzero(A_sparse) <= nnz)
+
+    # random sparse matrix with given row sparsity
+    row_sparsity = 2
+    A_sparse_row = random_sparse_matrix_given_row_sparsity(
+        key, (dim1, dim2), row_sparsity
+    )
+    print(jnp.isclose(jnp.count_nonzero(A_sparse_row), dim1 * row_sparsity, atol=1e-5))
+    print(jnp.all(jnp.sum(A_sparse_row != 0, axis=1) == row_sparsity))

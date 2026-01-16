@@ -72,6 +72,7 @@ q_oracle_sketch_matrix_element_vectorized = jax.vmap(
 def benchmark_random_vector(key, dim, unit_num_samples, repetition=10):
     key, subkey = random.split(key)
     vector = utils.random_unit_vector(subkey, dim, batch_size=repetition)
+    original_norm = jnp.linalg.norm(vector, axis=-1)
 
     keys = random.split(key, repetition)
     state_sketch, num_samples = q_state_sketch_vectorized(
@@ -79,7 +80,9 @@ def benchmark_random_vector(key, dim, unit_num_samples, repetition=10):
     )
     norm = jnp.linalg.norm(state_sketch, axis=-1)
 
-    error = jnp.linalg.norm(state_sketch - vector * target_norm, axis=-1)
+    error = jnp.linalg.norm(
+        state_sketch - vector / original_norm[:, None] * target_norm, axis=-1
+    )
     error_mean = jnp.mean(error)
     error_std = jnp.std(error) / jnp.sqrt(repetition)
 
@@ -168,6 +171,52 @@ def benchmark_random_sparse_matrix_element(
     }
 
 
+def benchmark_random_sparse_matrix_row_index(key, dim, unit_num_samples, repetition=10):
+    key, subkey = random.split(key)
+    # sparse_matrix = utils.random_sparse_matrix_constant_magnitude(
+    #     subkey, (dim, dim), nnz=3 * dim, magnitude=1, batch_size=repetition
+    # )
+    sparse_matrix = utils.random_sparse_matrix_given_row_sparsity(
+        subkey, (dim, dim), row_sparsity=8, batch_size=repetition
+    )
+
+    error = []
+
+    for _ in tqdm(range(repetition), desc="Repetitions", leave=False):
+        oracle_sketch, num_samples = qos.q_oracle_sketch_matrix_row_index(
+            sparse_matrix[_], unit_num_samples
+        )
+        # shape of oracle_sketch: (dim, row_sparsity, dim)
+        row_sparsity = oracle_sketch.shape[1]
+
+        target_oracle = jnp.zeros((dim, row_sparsity, dim), dtype=utils.real_dtype)
+        error_max = 0
+        for i in range(dim):
+            row = sparse_matrix[_][i]
+            non_zero_indices = jnp.nonzero(row)[0]
+            for j in range(min(row_sparsity, non_zero_indices.shape[0])):
+                col_idx = non_zero_indices[j]
+                target_oracle = target_oracle.at[i, j, col_idx].set(1)
+                error_max = max(
+                    error_max,
+                    jnp.sqrt(
+                        jnp.sum(jnp.abs(oracle_sketch[i, j] - target_oracle[i, j]) ** 2)
+                    ),
+                )
+
+        # operator norm error of diagonal matrices
+        error.append(error_max)
+    error = jnp.array(error)
+    error_mean = jnp.mean(error)
+    error_std = jnp.std(error) / jnp.sqrt(repetition)
+    num_samples = jnp.mean(num_samples)
+    return {
+        "error_mean": error_mean,
+        "error_std": error_std,
+        "num_samples": num_samples,
+    }
+
+
 def benchmark(
     key,
     benchmark_function,
@@ -200,7 +249,15 @@ def benchmark(
 
 
 def plot_benchmark_results(
-    results, title, dim_list=None, matrix=False, fit=None, save_path=None, show=False
+    results,
+    title,
+    dim_list=None,
+    fit=None,
+    dim_transform=lambda x: x,
+    dim_label="N",
+    dim_fit_label="N",
+    save_path=None,
+    show=False,
 ):
     plt.figure(figsize=(4, 3))
 
@@ -221,7 +278,7 @@ def plot_benchmark_results(
             error_mean_list,
             yerr=error_std_list,
             fmt="o",
-            label=rf"$N = {dim}$" if not matrix else f"$N_{{nnz}} = {dim}$",
+            label=rf"${dim_label} = {dim}$",
             color=rf"C{color_counter}",
             capsize=5,
         )
@@ -229,7 +286,9 @@ def plot_benchmark_results(
             # Plot fitted curve for this dimension
             num_samples_fit = jnp.array(num_samples_list)
             error_fit = (
-                fit["C"] * (dim ** fit["alpha"]) / (num_samples_fit ** fit["beta"])
+                fit["C"]
+                * (dim_transform(dim) ** fit["alpha"])
+                / (num_samples_fit ** fit["beta"])
             )
             plt.plot(
                 num_samples_fit,
@@ -241,10 +300,7 @@ def plot_benchmark_results(
 
     fit_handles = None
     if fit is not None:
-        if matrix:
-            label_str = rf"Fit: $M = {fit['C']:.1f} N_{{nnz}}^{{{fit['alpha']:.2f}}}/\epsilon^{{{fit['beta']:.2f}}}$"
-        else:
-            label_str = rf"Fit: $M = {fit['C']:.1f} N^{{{fit['alpha']:.2f}}}/\epsilon^{{{fit['beta']:.2f}}}$"
+        label_str = rf"Fit: $M = {fit['C']:.1f} {dim_fit_label}^{{{fit['alpha']:.2f}}}/\epsilon^{{{fit['beta']:.2f}}}$"
         rmse_str = rf"RMS rel. err.: ${fit['rmse'] * 100:.1f}\%$"
         fit_handles = [
             Line2D([], [], color="grey", linestyle="-", label=label_str),
@@ -272,7 +328,7 @@ def plot_benchmark_results(
     plt.close()
 
 
-def fit_sample_complexity(results):
+def fit_sample_complexity(results, dim_transform=lambda x: x):
     """
     Fits the sample complexity ansatz: num_samples = C * dim^alpha / error^beta
     using linear least squares in log-space.
@@ -283,7 +339,7 @@ def fit_sample_complexity(results):
     for dim, dim_results in results.items():
         for unit_num_samples, res in dim_results.items():
             num_samples.append(res["num_samples"])
-            dims.append(dim)
+            dims.append(dim_transform(dim))
             errors.append(res["error_mean"])
     # 1. Log-transform the data
     ln_sample = jnp.log(jnp.array(num_samples))
@@ -428,5 +484,35 @@ if __name__ == "__main__":
         dim_list=[200, 500, 1000, 2000],
         fit=fit,
         save_path="benchmark_matrix_element.pdf",
-        matrix=True,
+        dim_label=r"N_{nnz}",
+        dim_fit_label=r"N_{nnz}",
+    )
+
+    # 5. benchmark sparse matrix row index oracle sketch
+    print("-" * 40)
+    print("Benchmarking oracle sketch for sparse matrix row index oracle...")
+    dim_list = [50, 100, 200, 300, 400, 500]
+    unit_num_samples_list = (10 ** jnp.linspace(5, 8, num=10)).astype(int)
+    repetition = 5
+    print("Dimensions (square matrix): ", dim_list)
+    print("Number of samples:", unit_num_samples_list)
+    print("Repetitions:", repetition)
+    results = benchmark(
+        key,
+        benchmark_random_sparse_matrix_row_index,
+        dim_list,
+        unit_num_samples_list,
+        repetition,
+        verbose=True,
+    )
+    fit = fit_sample_complexity(results, dim_transform=lambda x: x * jnp.log2(x))
+    plot_benchmark_results(
+        results,
+        "Quantum Oracle Sketching: Sparse Matrix Row Index",
+        dim_list=[50, 100, 200, 400],
+        fit=fit,
+        dim_transform=lambda x: x * jnp.log2(x),
+        dim_label=r"N",
+        dim_fit_label=r"(N \log_2 N)",
+        save_path="benchmark_matrix_row_index.pdf",
     )
