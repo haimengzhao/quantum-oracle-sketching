@@ -319,7 +319,7 @@ def plot_benchmark_results(
     data_legend = plt.legend(loc="upper right")
     if fit_handles is not None:
         plt.gca().add_artist(data_legend)
-        plt.legend(handles=fit_handles, loc="lower left", handlelength=2)
+        plt.legend(handles=fit_handles, loc="lower left", handlelength=1)
     plt.tight_layout()
     if save_path is not None:
         plt.savefig(save_path)
