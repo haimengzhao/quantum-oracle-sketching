@@ -6,10 +6,9 @@ from collections import defaultdict
 import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.sparse.linalg import svds
 from sklearn.datasets import fetch_20newsgroups
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import RidgeClassifier
-from sklearn.model_selection import cross_val_score
 from tqdm import tqdm
 
 np.random.seed(42)
@@ -54,7 +53,7 @@ labels = {
     "quantum": "Quantum oracle sketching",
 }
 markers = {"streaming": "P", "sparse": "X", "quantum": "D"}
-figsize = (4, 3)
+figsize = (3.5, 3.5)
 markersize = {"streaming": 50, "sparse": 50, "quantum": 30}
 linewidth_marker = {"streaming": 0, "sparse": 0, "quantum": 0}
 
@@ -73,18 +72,32 @@ def load_data(categories=None):
         remove=("headers", "footers", "quotes"),
         return_X_y=True,
     )
-    return data_train[0], data_train[1], data_test[0], data_test[1]
+    # For PCA, we can use both train and test data to get a better estimate of the covariance
+    return list(data_train[0]) + list(data_test[0])
 
 
-def get_ridge_results(categories):
+def get_pca_results(categories):
     # 1. Load Data
-    X_train_raw, y_train, X_test_raw, y_test = load_data(categories)
+    raw_documents = load_data(categories)
 
-    # Combine for Cross Validation
-    X_all_raw = list(X_train_raw) + list(X_test_raw)
-    y_all = np.concatenate([y_train, y_test])
+    # 2. Compute "Ground Truth" (Full Dimension)
+    # min_df=1 for full dimension reference
+    full_vectorizer = TfidfVectorizer(stop_words="english", min_df=1)
+    X_full = full_vectorizer.fit_transform(raw_documents)
+    X_full.eliminate_zeros()  # type: ignore
 
-    # 2. Sweep min_df (Sparse Range for Smooth Plots)
+    # Compute Top Singular Vector (Ground Truth) on Sparse Data (No Centering)
+    # Note: We use X_full.asfptype() to ensure float compatibility for svds
+    _, _, vt_full = svds(X_full.asfptype(), k=1)
+    v_full = vt_full[0]  # type: ignore # Shape (D,)
+
+    # Max Norm Squared (energy of the top component)
+    # X_full @ v_full is (N_samples,), norm squared gives sum of squared projections
+    var_max = np.linalg.norm(X_full @ v_full) ** 2
+
+    # Vocabulary map
+    vocab_full = full_vectorizer.vocabulary_
+    D_full = X_full.shape[1]
 
     # Storage
     results = {
@@ -92,70 +105,86 @@ def get_ridge_results(categories):
         "space_streaming": [],
         "space_sparse": [],
         "space_quantum": [],
-        "accuracies": [],
-        "error_rates": [],
+        "variance_recovery": [],
     }
 
     tqdm.write(f"Sweeping min_df for categories {categories}...")
 
     for mdf in tqdm(min_dfs, desc="min_df Sweep", leave=False):
         vectorizer = TfidfVectorizer(min_df=mdf, stop_words="english")
-        X_all = vectorizer.fit_transform(X_all_raw)
-        X_all.eliminate_zeros()  # type: ignore
+        X_trunc = vectorizer.fit_transform(raw_documents)
+        X_trunc.eliminate_zeros()  # type: ignore
 
-        shape = X_all.get_shape()
+        shape = X_trunc.get_shape()
         feature_dim = shape[1]
         num_samples = shape[0]
 
         # Sparsity calculation
-        row_sparsity = int(X_all.getnnz(axis=1).max())
-        col_sparsity = int(X_all.getnnz(axis=0).max())
+        row_sparsity = int(X_trunc.getnnz(axis=1).max())
+        col_sparsity = int(X_trunc.getnnz(axis=0).max())
         sparsity = max(row_sparsity, col_sparsity)
 
         # --- Space Calculations ---
-        # Any classical streaming algorithm must at least store the weight vector,
+        # --- Space Calculations ---
+        # Any classical streaming algorithm must at least store the principal component,
         #    which is of size d. So classical streaming space is d floats.
         # Any classical standard algorithm that stores the whole sparse matrix
         #    must at least store all non-zero entries, so classical sparse space is nnz.
         space_stream = feature_dim  # Classical Streaming Space: d
-        space_sparse = X_all.getnnz()  # Classical Sparse Space: nnz
+        space_sparse = X_trunc.getnnz()  # Classical Sparse Space: nnz
 
         # We use quantum oracle sketching to build:
-        # 1. The block encoding of the augmented data matrix [X; \lambda I] in R^{(n+d) x d},
-        #    Its Hermitian dilation is in R^{(n+2d) x (n+2d)}. This requires building the
-        #    sparse index/element oracle for the augmented matrix, which has sparsity = sparsity + 1.
-        #    Hence, building index oracle requires 2log2(n+2d) + log2(sparsity + 1) + 2 (QSVT & binary search output) qubits.
+        # 1. The block encoding of the data matrix X in R^{n x d},
+        #    Its Hermitian dilation is in R^{(n+d) x (n+d)}. This requires building the
+        #    sparse index/element oracle for the dilated matrix, which has sparsity = sparsity.
+        #    Hence, building index oracle requires 2log2(n+d) + log2(sparsity) + 2 (QSVT & binary search output) qubits.
         #    Building element oracle requires can reuse the same qubits, so no extra qubits needed.
-        # 2. The state preparation unitary block encoding of the label vector y in R^n, which
-        #    requires log2(n) + 2 (first LCU+QSVT and second LCU) qubits. These qubits are contained
+        # 2. The state preparation unitary block encoding of the guiding vector g in R^d, which
+        #    requires log2(d) + 2 (first LCU+QSVT and second LCU) qubits. These qubits are contained
         #    in the previous count and they can be reused.
-        # Then we perform quantum ridge regression with amplitude amplification using QSVT-based quantum linear system solver,
+        # Then we perform quantum ground state preparation algorithm using QSVT,
         #    which requires 1 ancilla qubit for the QSVT, contained in the previous count because we can reuse
         #    the ancilla qubit from quantum oracle sketching.
         # Finally, we need to perform interferometric measurement to calculate the signed overlap with test state,
         #    which requires 1 extra ancilla qubit.
         # The final estimate of the label is stored classically on a running average, so only 1 extra float is needed.
         # Therefore, total quantum space is:
-        #   (2log2(n + 2d) + log2(sparsity + 1) + 3) qubits + 1 float
+        #   (2log2(n + d) + log2(sparsity) + 3) qubits + 1 float
         space_quantum = (
-            2 * np.ceil(np.log2(num_samples + 2 * feature_dim))
-            + np.ceil(np.log2(sparsity + 1))
+            2 * np.ceil(np.log2(num_samples + feature_dim))
+            + np.ceil(np.log2(sparsity))
             + 4  # + 3 qubits + 1 float
         )
 
-        # --- Ridge Training & Eval (CV) ---
-        clf = RidgeClassifier(random_state=42, alpha=1.0, solver="auto")
-        # 5-Fold Cross Validation
-        # That means in each fold, we train on 80% data and test on 20% data
-        scores = cross_val_score(clf, X_all, y_all, cv=5)
-        acc = scores.mean()
+        # --- SVD Calculation (Sparse) ---
+        # Compute Top Singular Vector in Truncated Space
+        _, _, vt_trunc = svds(X_trunc.asfptype(), k=1)
+        v_trunc = vt_trunc[0]  # type: ignore
+
+        # --- Variance Recovery Calculation ---
+        # Lift to Full Space
+        trunc_vocab = vectorizer.vocabulary_
+        v_lifted = np.zeros(D_full)
+
+        # Lifting loop
+        for word, idx_trunc in trunc_vocab.items():
+            if word in vocab_full:
+                idx_full = vocab_full[word]
+                v_lifted[idx_full] = v_trunc[idx_trunc]
+
+        # Normalize lifted vector (unit direction)
+        norm = np.linalg.norm(v_lifted)
+        v_lifted = v_lifted / norm
+
+        # Variance (Energy) Captured
+        var_captured = np.linalg.norm(X_full @ v_lifted) ** 2  # type: ignore
+        recovery = var_captured / var_max
 
         results["min_dfs"].append(mdf)
         results["space_streaming"].append(space_stream)
         results["space_sparse"].append(space_sparse)
         results["space_quantum"].append(space_quantum)
-        results["accuracies"].append(acc)
-        results["error_rates"].append(1.0 - acc)
+        results["variance_recovery"].append(recovery)
 
     return results
 
@@ -163,7 +192,7 @@ def get_ridge_results(categories):
 def plot_parametric_hybrid(
     x_mean, x_std, y_mean, y_std, color, marker, label, linewidth, marker_size, ax=None
 ):
-    # 1. Horizontal Tube (Accuracy/Error Variance)
+    # 1. Horizontal Tube (Metric Variance)
     plt.fill_betweenx(
         y_mean, x_mean - x_std, x_mean + x_std, color=color, alpha=0.2, edgecolor="none"
     )
@@ -181,8 +210,6 @@ def plot_parametric_hybrid(
         idx = (np.abs(x_mean - tx)).argmin()
         if idx not in marker_indices:
             marker_indices.append(idx)
-    marker_indices.append(-3)
-    # marker_indices = np.arange(len(x_mean))
 
     plt.scatter(
         x_mean[marker_indices],
@@ -213,10 +240,8 @@ def run_analysis(n_pairs=10, from_json_data=None):
         k: {
             "mean_space": [],
             "std_space": [],
-            "mean_acc": [],
-            "std_acc": [],
-            "mean_err": [],
-            "std_err": [],
+            "mean_var": [],
+            "std_var": [],
         }
         for k in keys
     }
@@ -237,18 +262,21 @@ def run_analysis(n_pairs=10, from_json_data=None):
 
             for k in keys:
                 spaces = np.array(by_min_df[mdf][k]["space"])
-                accs = np.array(by_min_df[mdf][k]["accuracy"])
-                errs = np.array(by_min_df[mdf][k]["error"])
+
+                # Handle variance/recovery key
+                if "variance_recovery" in by_min_df[mdf][k]:
+                    vars_ = np.array(by_min_df[mdf][k]["variance_recovery"])
+                elif "variance" in by_min_df[mdf][k]:
+                    vars_ = np.array(by_min_df[mdf][k]["variance"])
+                else:
+                    vars_ = np.zeros_like(spaces)
 
                 if len(spaces) > 0:
-                    # calculate mean and std error of the mean
                     sqrt_n = np.sqrt(len(spaces))
                     final_stats[k]["mean_space"].append(np.mean(spaces))
                     final_stats[k]["std_space"].append(np.std(spaces) / sqrt_n)
-                    final_stats[k]["mean_acc"].append(np.mean(accs))
-                    final_stats[k]["std_acc"].append(np.std(accs) / sqrt_n)
-                    final_stats[k]["mean_err"].append(np.mean(errs))
-                    final_stats[k]["std_err"].append(np.std(errs) / sqrt_n)
+                    final_stats[k]["mean_var"].append(np.mean(vars_))
+                    final_stats[k]["std_var"].append(np.std(vars_) / sqrt_n)
 
     else:
         print(f"Running Analysis over {n_pairs} random sets of 1v1 categories...")
@@ -257,40 +285,40 @@ def run_analysis(n_pairs=10, from_json_data=None):
         ).target_names  # type: ignore
 
         by_min_df = defaultdict(
-            lambda: {k: {"space": [], "error": [], "accuracy": []} for k in keys}
+            lambda: {k: {"space": [], "variance_recovery": []} for k in keys}
         )
 
         for i in tqdm(range(n_pairs), desc="Category Pairs", leave=True):
             # Randomly select 2 categories
-            cats = random.sample(all_cats, 2)
+            try:
+                cats = random.sample(all_cats, 2)
+            except ValueError:
+                continue
 
             tqdm.write(f"[{i + 1}/{n_pairs}] Group: {cats}")
 
-            # Calculate Ridge accuracy and space
-            res = get_ridge_results(cats)
+            # Calculate PCA variance and space
+            res = get_pca_results(cats)
 
             for j, mdf in enumerate(res["min_dfs"]):
                 for k in keys:
                     by_min_df[mdf][k]["space"].append(res[f"space_{k}"][j])
-                    by_min_df[mdf][k]["error"].append(res["error_rates"][j])
-                    by_min_df[mdf][k]["accuracy"].append(res["accuracies"][j])
+                    by_min_df[mdf][k]["variance_recovery"].append(
+                        res["variance_recovery"][j]
+                    )
 
         # Compute Stats
         for mdf in sorted(by_min_df.keys()):
             for k in keys:
                 spaces = np.array(by_min_df[mdf][k]["space"])
-                accs = np.array(by_min_df[mdf][k]["accuracy"])
-                errs = np.array(by_min_df[mdf][k]["error"])
+                vars_ = np.array(by_min_df[mdf][k]["variance_recovery"])
 
                 if len(spaces) > 0:
-                    # calculate mean and std error of the mean
                     sqrt_n = np.sqrt(len(spaces))
                     final_stats[k]["mean_space"].append(np.mean(spaces))
                     final_stats[k]["std_space"].append(np.std(spaces) / sqrt_n)
-                    final_stats[k]["mean_acc"].append(np.mean(accs))
-                    final_stats[k]["std_acc"].append(np.std(accs) / sqrt_n)
-                    final_stats[k]["mean_err"].append(np.mean(errs))
-                    final_stats[k]["std_err"].append(np.std(errs) / sqrt_n)
+                    final_stats[k]["mean_var"].append(np.mean(vars_))
+                    final_stats[k]["std_var"].append(np.std(vars_) / sqrt_n)
 
         # Save Data
         data_to_save = {
@@ -307,16 +335,16 @@ def run_analysis(n_pairs=10, from_json_data=None):
                 for mdf, mdf_dict in by_min_df.items()
             },
         }
-        with open("20newsgroups_size_vs_accuracy.json", "w") as f:
+        with open("20newsgroups_size_vs_variance.json", "w") as f:
             json.dump(data_to_save, f, indent=2)
-        print("Saved raw data to 20newsgroups_size_vs_accuracy.json")
+        print("Saved raw data to 20newsgroups_size_vs_variance.json")
 
-    # Plot: Size vs Accuracy (Log-Log)
+    # Plot: Size vs Variance Recovery
     plt.figure(figsize=figsize)
     for k in keys:
         xm, xs, ym, ys = get_sorted_arrays(
-            final_stats[k]["mean_acc"],
-            final_stats[k]["std_acc"],
+            final_stats[k]["mean_var"],
+            final_stats[k]["std_var"],
             final_stats[k]["mean_space"],
             final_stats[k]["std_space"],
         )
@@ -334,7 +362,7 @@ def run_analysis(n_pairs=10, from_json_data=None):
 
     halo = [pe.withStroke(linewidth=3, foreground="white")]
     plt.text(
-        0.83,
+        0.56,
         8e4,
         "Classical sparse & QRAM",
         color=colors["sparse"],
@@ -342,41 +370,46 @@ def run_analysis(n_pairs=10, from_json_data=None):
         path_effects=halo,
     )
     plt.text(
-        0.88,
-        9e3,
+        0.98,
+        1e4,
         "Classical streaming",
         color=colors["streaming"],
         fontsize=10,
         path_effects=halo,
+        ha="right",
     )
     plt.text(
-        0.86,
+        1,
         7e1,
         "Quantum oracle sketching",
         color=colors["quantum"],
         fontsize=10,
         path_effects=halo,
+        ha="right",
     )
 
     plt.yscale("log")
-    plt.ylim(1e1, None)
-    plt.xlabel("Accuracy")
+    plt.ylim(1e1, 2e5)
+    plt.xlabel("Relative explained variance")
     plt.xticks(
-        [0.84, 0.86, 0.88, 0.90, 0.92, 0.94],
-        ["84%", "86%", "88%", "90%", "92%", "94%"],
+        [0.6, 0.7, 0.8, 0.9, 1.0],
+        ["60%", "70%", "80%", "90%", "100%"],
     )
+    plt.xlim(0.52, 1.03)
     plt.tick_params(direction="in", which="both", top=False, right=True)
-    plt.ylabel("Model size")
-    # plt.legend()
+    ax = plt.gca()
+    ax.set_ylabel("Model size", color=(0, 0, 0, 0))
+    ax.tick_params(axis="y", labelcolor=(0, 0, 0, 0))
     plt.grid(True, which="major", ls="-", alpha=0.1)
+    plt.title("Dimension reduction")
     plt.tight_layout()
-    plt.savefig("20newsgroups_size_vs_accuracy.pdf")
-    print("Saved 20newsgroups_size_vs_accuracy.pdf")
+    plt.savefig("20newsgroups_size_vs_variance.pdf")
+    print("Saved 20newsgroups_size_vs_variance.pdf")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="20newsgroups Model Size vs Accuracy Analysis"
+        description="20newsgroups Model Size vs Variance Analysis"
     )
     parser.add_argument(
         "--n_pairs",
