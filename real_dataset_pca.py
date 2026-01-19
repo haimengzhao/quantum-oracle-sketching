@@ -49,7 +49,7 @@ colors = {
 }
 labels = {
     "streaming": "Classical streaming",
-    "sparse": "Classical sparse and QRAM",
+    "sparse": "Classical sparse / QRAM",
     "quantum": "Quantum oracle sketching",
 }
 markers = {"streaming": "P", "sparse": "X", "quantum": "D"}
@@ -364,7 +364,7 @@ def run_analysis(n_pairs=10, from_json_data=None):
     plt.text(
         0.56,
         8e4,
-        "Classical sparse & QRAM",
+        "Classical sparse / QRAM",
         color=colors["sparse"],
         fontsize=10,
         path_effects=halo,

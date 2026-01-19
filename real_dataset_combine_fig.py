@@ -154,7 +154,7 @@ def plot_accuracy_panel(ax, stats):
     ax.text(
         0.83,
         9e4,
-        "Classical sparse & QRAM",
+        "Classical sparse / QRAM",
         color=colors["sparse"],
         fontsize=10,
         path_effects=halo,
@@ -215,7 +215,7 @@ def plot_variance_panel(ax, stats):
     ax.text(
         0.535,
         9e4,
-        "Classical sparse & QRAM",
+        "Classical sparse / QRAM",
         color=colors["sparse"],
         fontsize=10,
         path_effects=halo,
