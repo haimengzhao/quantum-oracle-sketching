@@ -9,3 +9,4 @@ __pycache__/
 *.pdf
 # Ignore dataset files
 *.json
+/data_cache/*
