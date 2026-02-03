@@ -43,8 +43,8 @@ num_markers = 20
 
 # --- Plotting ---
 colors = {
-    "quantum": "#E69F00",  # Rich, readable Gold (Okabe-Ito palette)
-    "streaming": "#005AB5",  # Strong Blue
+    "quantum": "#CD591A",  # Quantum curve color
+    "streaming": "#2657AF",  # Strong Blue
     "sparse": "#606060",  # Dark Grey (De-emphasized)
 }
 labels = {

@@ -35,8 +35,8 @@ plt.rcParams.update(
 num_markers = 40
 
 colors = {
-    "quantum": "#E69F00",
-    "streaming": "#005AB5",
+    "quantum": "#CD591A",
+    "streaming": "#2657AF",
     "sparse": "#606060",
 }
 labels = {

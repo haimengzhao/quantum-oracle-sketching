@@ -36,8 +36,8 @@ min_dfs = list(range(2, 21)) + list(range(25, 105, 5))
 num_markers = 20
 
 colors = {
-    "quantum": "#E69F00",
-    "streaming": "#005AB5",
+    "quantum": "#CD591A",
+    "streaming": "#2657AF",
     "sparse": "#606060",
 }
 labels = {
