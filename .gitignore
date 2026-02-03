@@ -1,6 +1,7 @@
 # gitignore
 # Ignore Jupyter notebook checkpoints
 .ipynb_checkpoints
+test.ipynb
 # Ignore Python cache files
 __pycache__/
 *.pyc

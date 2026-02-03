@@ -1,6 +1,6 @@
-
 import argparse
 import json
+
 import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 import numpy as np
@@ -47,16 +47,23 @@ markersize = {"streaming": 50, "sparse": 50, "quantum": 30}
 linewidth_marker = {"streaming": 0, "sparse": 0, "quantum": 0}
 
 
-def plot_parametric_hybrid(ax, x_mean, x_std, y_mean, color, marker, label, linewidth, marker_size):
+def plot_parametric_hybrid(
+    ax, x_mean, x_std, y_mean, color, marker, label, linewidth, marker_size
+):
     x_vals = np.array(x_mean)
     y_vals = np.array(y_mean)
     x_errs = np.array(x_std) if x_std is not None else None
-    
+
     if x_errs is not None and np.any(x_errs > 0):
         ax.fill_betweenx(
-            y_vals, x_vals - x_errs, x_vals + x_errs, color=color, alpha=0.2, edgecolor="none"
+            y_vals,
+            x_vals - x_errs,
+            x_vals + x_errs,
+            color=color,
+            alpha=0.2,
+            edgecolor="none",
         )
-    
+
     ax.plot(x_vals, y_vals, linestyle="-", color=color, linewidth=1.5, alpha=0.9)
 
     ax.scatter(
@@ -99,17 +106,17 @@ def compute_stats_from_json(data, metric_type):
     for ms in min_samps:
         for k in keys:
             entry = raw_data[str(ms)][k]
-            
+
             space = float(entry["space"])
             final_stats[k]["mean_space"].append(space)
             final_stats[k]["std_space"].append(0.0)
-            
+
             if metric_type == "accuracy":
                 acc_mean = float(entry["accuracy_mean"])
                 acc_sem = float(entry["accuracy_sem"])
                 final_stats[k]["mean_x"].append(acc_mean)
                 final_stats[k]["std_x"].append(acc_sem)
-            
+
             elif metric_type == "variance":
                 var_rec = float(entry["variance_recovery"])
                 final_stats[k]["mean_x"].append(var_rec)
@@ -146,7 +153,7 @@ def plot_accuracy_panel(ax, stats):
         )
 
     halo = [pe.withStroke(linewidth=3, foreground="white")]
-    
+
     ax.text(
         0.775,
         8e4,
@@ -177,11 +184,11 @@ def plot_accuracy_panel(ax, stats):
     ax.set_yscale("log")
     ax.set_ylim(1e1, 2e5)
     ax.set_xlabel("Accuracy")
-    
+
     ax.set_xticks([0.78, 0.8, 0.82, 0.84, 0.86])
     ax.set_xticklabels(["78%", "80%", "82%", "84%", "86%"])
     ax.set_xlim(0.77, 0.875)
-    
+
     ax.set_ylabel("Machine size")
     ax.tick_params(direction="in", which="both", top=False, right=True)
     ax.grid(True, which="major", ls="-", alpha=0.1)
@@ -212,7 +219,7 @@ def plot_variance_panel(ax, stats):
         )
 
     halo = [pe.withStroke(linewidth=3, foreground="white")]
-    
+
     ax.text(
         0.4,
         8e4,
@@ -243,11 +250,11 @@ def plot_variance_panel(ax, stats):
     ax.set_yscale("log")
     ax.set_ylim(1e1, 2e5)
     ax.set_xlabel("Relative explained variance")
-    
+
     ax.set_xticks([0.4, 0.6, 0.8, 1.0])
     ax.set_xticklabels(["40%", "60%", "80%", "100%"])
     ax.set_xlim(0.3, 1.05)
-    
+
     ax.tick_params(direction="in", which="both", top=False, right=True)
     ax.grid(True, which="major", ls="-", alpha=0.1)
     ax.set_title("Dimension reduction")
@@ -272,7 +279,7 @@ def main():
     parser.add_argument(
         "--out",
         type=str,
-        default="splice_combine.pdf",
+        default="splice_size_vs_accuracy_and_variance.pdf",
         help="Output figure path.",
     )
     args = parser.parse_args()

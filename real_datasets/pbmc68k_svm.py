@@ -1,16 +1,19 @@
 import argparse
 import json
+from itertools import combinations
 
 import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 import numpy as np
-import splice_utils
+import pbmc68k_utils
 from sklearn.linear_model import RidgeClassifier
 from sklearn.model_selection import cross_val_score
 from tqdm import tqdm
 
 np.random.seed(42)
+N_PAIRS = 100  # Number of random pairs to average over
 
+# Same Plotting Style
 plt.rcParams.update(
     {
         "font.family": "sans",
@@ -36,7 +39,8 @@ plt.rcParams.update(
     }
 )
 
-min_samples_list = splice_utils.get_min_samples_sweep()
+# min_samples sweep - similar to min_df
+min_samples_list = pbmc68k_utils.get_min_samples_sweep()
 num_markers = 40
 
 colors = {
@@ -55,17 +59,30 @@ markersize = {"streaming": 50, "sparse": 50, "quantum": 30}
 linewidth_marker = {"streaming": 0, "sparse": 0, "quantum": 0}
 
 
-def get_ridge_results_full():
-    tqdm.write("Loading Splice Junction dataset (binary: EI vs IE)...")
-    X_full, y, label_names = splice_utils.load_splice_data(binary=True, min_samples=1)
-    tqdm.write(f"Dataset shape: {X_full.shape}, Classes: {label_names}")
-    row_sparsity = int(X_full.getnnz(axis=1).max())
-    col_sparsity = int(X_full.getnnz(axis=0).max())
-    sparsity = max(row_sparsity, col_sparsity)
-    tqdm.write(
-        f"Max row sparsity: {row_sparsity}, Max col sparsity: {col_sparsity}, Overall sparsity: {sparsity}"
-    )
+def get_random_pairs(n_classes, n_pairs, rng):
+    """Generate n_pairs random pairs from n_classes."""
+    all_pairs = list(combinations(range(n_classes), 2))
+    indices = rng.choice(len(all_pairs), size=n_pairs, replace=True)
+    return [all_pairs[i] for i in indices]
 
+
+def get_ridge_results_full():
+    # 1. Load Full Data (normalized, all genes, all classes)
+    tqdm.write("Loading PBMC68k dataset (all classes)...")
+    X_full, y_full, label_names = pbmc68k_utils.load_pbmc68k_data(
+        min_samples=1, normalize=True, binary=False
+    )
+    tqdm.write(f"Dataset shape: {X_full.shape}, Classes: {label_names}")
+
+    # 2. Generate random pairs of cell types
+    rng = np.random.default_rng(42)
+    n_classes = len(label_names)
+    pairs = get_random_pairs(n_classes, N_PAIRS, rng)
+    tqdm.write(f"Using {len(pairs)} random class pairs for binary classification")
+    for i, (c1, c2) in enumerate(pairs):
+        tqdm.write(f"  Pair {i + 1}: {label_names[c1]} vs {label_names[c2]}")
+
+    # 3. Sweep min_samples
     results = {
         "min_samples": [],
         "space_streaming": [],
@@ -73,45 +90,79 @@ def get_ridge_results_full():
         "space_quantum": [],
         "accuracies_mean": [],
         "accuracies_std": [],
+        "pairs": [(label_names[c1], label_names[c2]) for c1, c2 in pairs],
     }
 
-    tqdm.write("Sweeping min_samples for Splice Junction...")
+    tqdm.write("Sweeping min_samples for PBMC68k (averaged over random pairs)...")
 
     for min_samp in tqdm(min_samples_list, desc="min_samples Sweep"):
-        X, _ = splice_utils.filter_features_by_frequency(X_full, min_samp)
+        # Filter genes by min_samples on full data
+        X_filtered, gene_indices = pbmc68k_utils.filter_genes_by_frequency(
+            X_full, min_samp
+        )
 
-        if X.shape[1] == 0:
+        # Skip if no genes remain
+        if X_filtered.shape[1] == 0:
             continue
 
-        shape = X.get_shape()
-        feature_dim = shape[1]
-        num_samples = shape[0]
+        # Collect results across all pairs
+        pair_accuracies = []
+        pair_space_streaming = []
+        pair_space_sparse = []
+        pair_space_quantum = []
 
-        row_sparsity = int(X.getnnz(axis=1).max())
-        col_sparsity = int(X.getnnz(axis=0).max())
-        sparsity = max(row_sparsity, col_sparsity)
+        for c1, c2 in pairs:
+            # Create binary subset for this pair
+            mask = (y_full == c1) | (y_full == c2)
+            X_pair = X_filtered[mask]
+            y_pair = (y_full[mask] == c2).astype(
+                int
+            )  # Binary labels: 0 for c1, 1 for c2
 
-        space_stream = feature_dim
-        space_sparse = X.getnnz()
+            shape = X_pair.get_shape()
+            feature_dim = shape[1]
+            num_samples = shape[0]
 
-        space_quantum = (
-            2 * np.ceil(np.log2(num_samples + 2 * feature_dim))
-            + np.ceil(np.log2(sparsity + 1))
-            + 4
-        )
+            # Sparsity calculation
+            row_sparsity = int(X_pair.getnnz(axis=1).max())
+            col_sparsity = int(X_pair.getnnz(axis=0).max())
+            sparsity = max(row_sparsity, col_sparsity)
 
-        clf = RidgeClassifier(
-            random_state=42, alpha=1, solver="auto", class_weight="balanced"
-        )
-        scores = cross_val_score(clf, X, y, cv=5)
+            # --- Space Calculations ---
+            space_stream = feature_dim
+            space_sparse = X_pair.getnnz()
+            space_quantum = (
+                2 * np.ceil(np.log2(num_samples + 2 * feature_dim))
+                + np.ceil(np.log2(sparsity + 1))
+                + 4
+            )
 
-        acc_mean = scores.mean()
-        acc_sem = scores.std() / np.sqrt(len(scores))
+            # --- Ridge Training & Eval (CV) ---
+            clf = RidgeClassifier(
+                random_state=42, alpha=200.0, solver="auto", class_weight="balanced"
+            )
+            # 5-Fold Cross Validation
+            scores = cross_val_score(clf, X_pair, y_pair, cv=5)
+
+            pair_accuracies.append(scores.mean())
+            pair_space_streaming.append(space_stream)
+            pair_space_sparse.append(space_sparse)
+            pair_space_quantum.append(space_quantum)
+
+        # Average across pairs
+        acc_mean = np.mean(pair_accuracies)
+        # Standard error across pairs (variation between pairs)
+        acc_sem = np.std(pair_accuracies) / np.sqrt(len(pair_accuracies))
+
+        # Average space metrics (they vary slightly due to different sample sizes per pair)
+        space_streaming_mean = np.mean(pair_space_streaming)
+        space_sparse_mean = np.mean(pair_space_sparse)
+        space_quantum_mean = np.mean(pair_space_quantum)
 
         results["min_samples"].append(min_samp)
-        results["space_streaming"].append(space_stream)
-        results["space_sparse"].append(space_sparse)
-        results["space_quantum"].append(space_quantum)
+        results["space_streaming"].append(space_streaming_mean)
+        results["space_sparse"].append(space_sparse_mean)
+        results["space_quantum"].append(space_quantum_mean)
         results["accuracies_mean"].append(acc_mean)
         results["accuracies_std"].append(acc_sem)
 
@@ -134,7 +185,17 @@ def plot_parametric_hybrid(
         edgecolor="none",
     )
 
+    # Line
     plt.plot(x_vals, y_vals, linestyle="-", color=color, linewidth=1.5, alpha=0.9)
+
+    # # Markers
+    # x_min, x_max = np.min(x_vals), np.max(x_vals)
+    # target_x = np.linspace(x_min, x_max, num=num_markers)
+    # marker_indices = []
+    # for tx in target_x:
+    #     idx = (np.abs(x_vals - tx)).argmin()
+    #     if idx not in marker_indices:
+    #         marker_indices.append(idx)
 
     plt.scatter(
         x_vals,
@@ -177,7 +238,7 @@ def run_analysis(load_file=None):
                 final_stats[k]["sem_acc"].append(raw_data[str(ms)][k]["accuracy_sem"])
 
     else:
-        print("Running Ridge Analysis on Splice Junction Dataset (Binary)...")
+        print("Running Ridge Analysis on PBMC68k Dataset (Binary Classification)...")
         results = get_ridge_results_full()
 
         final_stats = {
@@ -185,7 +246,9 @@ def run_analysis(load_file=None):
         }
 
         data_to_save = {
-            "dataset": "Splice Junction (Binary: EI vs IE)",
+            "dataset": "PBMC68k (Binary, averaged over random pairs)",
+            "pairs": results.get("pairs", []),
+            "n_pairs": len(results.get("pairs", [])),
             "raw_data_by_min_samples": {},
         }
 
@@ -207,9 +270,9 @@ def run_analysis(load_file=None):
                     "accuracy_sem": acc_sem,
                 }
 
-        with open("splice_size_vs_accuracy.json", "w") as f:
+        with open("pbmc68k_size_vs_accuracy.json", "w") as f:
             json.dump(data_to_save, f, indent=2)
-        print("Saved raw data to splice_size_vs_accuracy.json")
+        print("Saved raw data to pbmc68k_size_vs_accuracy.json")
 
     # Plot
     plt.figure(figsize=figsize)
@@ -219,11 +282,10 @@ def run_analysis(load_file=None):
             final_stats[k]["sem_acc"],
             final_stats[k]["mean_space"],
         )
-        ind = xm > 0.775
         plot_parametric_hybrid(
-            xm[ind],
-            xs[ind],
-            ym[ind],
+            xm,
+            xs,
+            ym,
             colors[k],
             markers[k],
             labels[k],
@@ -233,22 +295,17 @@ def run_analysis(load_file=None):
 
     halo = [pe.withStroke(linewidth=3, foreground="white")]
 
-    sparse_spaces = final_stats["sparse"]["mean_space"]
-    streaming_spaces = final_stats["streaming"]["mean_space"]
-    quantum_spaces = final_stats["quantum"]["mean_space"]
-    acc_vals = final_stats["sparse"]["mean_acc"]
-
     plt.text(
-        0.78,
-        8e4,
+        0.8,
+        1.8e6,
         "Classical sparse / QRAM",
         color=colors["sparse"],
         fontsize=10,
         path_effects=halo,
     )
     plt.text(
-        0.845,
-        1e3,
+        0.888,
+        1.2e4,
         "Classical streaming",
         color=colors["streaming"],
         fontsize=10,
@@ -256,7 +313,7 @@ def run_analysis(load_file=None):
         ha="right",
     )
     plt.text(
-        0.86,
+        0.90,
         1.5e1,
         "Quantum oracle sketching",
         color=colors["quantum"],
@@ -268,22 +325,25 @@ def run_analysis(load_file=None):
     plt.yscale("log")
     plt.xlabel("Accuracy")
 
-    plt.xticks([0.78, 0.8, 0.82, 0.84, 0.86], ["78%", "80%", "82%", "84%", "86%"])
-    plt.xlim(0.77, 0.875)
+    plt.xticks(
+        [0.80, 0.82, 0.84, 0.86, 0.88, 0.90],
+        ["80%", "82%", "84%", "86%", "88%", "90%"],
+    )
+    plt.xlim(0.795, 0.915)
 
     plt.tick_params(direction="in", which="both", top=False, right=True)
     plt.ylabel("Machine size")
-    plt.ylim(1e1, 2e5)
+    plt.ylim(1e1, 1e7)
     plt.grid(True, which="major", ls="-", alpha=0.1)
-    plt.title("Binary classification (Splice)")
+    plt.title("Binary classification")
     plt.tight_layout()
-    plt.savefig("splice_size_vs_accuracy.pdf")
-    print("Saved splice_size_vs_accuracy.pdf")
+    plt.savefig("pbmc68k_size_vs_accuracy.pdf")
+    print("Saved pbmc68k_size_vs_accuracy.pdf")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Splice Junction Machine Size vs Accuracy Analysis"
+        description="PBMC68k Machine Size vs Accuracy Analysis"
     )
     parser.add_argument(
         "--load", type=str, default=None, help="Load analysis data from JSON file"

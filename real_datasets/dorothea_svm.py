@@ -1,14 +1,13 @@
 import argparse
 import json
 
+import dorothea_utils
 import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.linear_model import RidgeClassifier
 from sklearn.model_selection import cross_val_score
 from tqdm import tqdm
-
-import dorothea_utils
 
 np.random.seed(42)
 
@@ -51,6 +50,7 @@ min_dfs = [
     55,
     69,
     82,
+    90,
     97,
     114,
     128,
@@ -83,6 +83,13 @@ def get_svm_results_full():
     # 1. Load Data
     print("Loading Dorothea data...")
     X_full, y_full = dorothea_utils.load_dorothea_data(valid=True)
+    tqdm.write(f"Dataset shape: {X_full.shape}")
+    row_sparsity = int(X_full.getnnz(axis=1).max())
+    col_sparsity = int(X_full.getnnz(axis=0).max())
+    sparsity = max(row_sparsity, col_sparsity)
+    tqdm.write(
+        f"Max row sparsity: {row_sparsity}, Max col sparsity: {col_sparsity}, Overall sparsity: {sparsity}"
+    )
 
     # Pre-compute document frequencies
     print("Computing document frequencies...")
@@ -130,7 +137,7 @@ def get_svm_results_full():
         )
 
         clf = RidgeClassifier(
-            random_state=42, alpha=3, solver="auto", class_weight="balanced"
+            random_state=42, alpha=200, solver="auto", class_weight="balanced"
         )
 
         # 5-Fold Cross Validation

@@ -1,14 +1,13 @@
 import argparse
 import json
 
+import imdb_utils
 import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.sparse.linalg import svds
 from sklearn.feature_extraction.text import TfidfVectorizer
 from tqdm import tqdm
-
-import imdb_utils
 
 np.random.seed(42)
 
@@ -229,7 +228,7 @@ def plot_parametric_hybrid(
         idx = (np.abs(x_mean - tx)).argmin()
         if idx not in marker_indices:
             marker_indices.append(idx)
-    marker_indices += [-5, -10, -15, -20]
+    marker_indices += [-2, -5, -10, -15, -19, -24]
 
     plt.scatter(
         np.array(x_mean)[marker_indices],
@@ -329,7 +328,7 @@ def run_analysis(load_file=None):
         path_effects=halo,
     )
     plt.text(
-        1,
+        0.99,
         9e4,
         "Classical streaming",
         color=colors["streaming"],
@@ -357,10 +356,10 @@ def run_analysis(load_file=None):
     plt.xlim(0.73, 1.03)
     plt.tick_params(direction="in", which="both", top=False, right=True)
     ax = plt.gca()
-    ax.set_ylabel("Machine size", color=(0, 0, 0, 0))
-    ax.tick_params(axis="y", labelcolor=(0, 0, 0, 0))
+    ax.set_ylabel("Machine size")
+    ax.tick_params(axis="y")
     plt.grid(True, which="major", ls="-", alpha=0.1)
-    plt.title("Dimension reduction (IMDB)")
+    plt.title("Dimension reduction")
     plt.tight_layout()
     plt.savefig("imdb_size_vs_variance.pdf")
     print("Saved imdb_size_vs_variance.pdf")

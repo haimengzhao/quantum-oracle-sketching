@@ -1,17 +1,16 @@
 import argparse
 import json
 
-import dorothea_utils
 import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 import numpy as np
-import scipy.sparse as sp
+import pbmc68k_utils
 from scipy.sparse.linalg import svds
 from tqdm import tqdm
 
 np.random.seed(42)
 
-# Plotting Style
+# Same Plotting Style
 plt.rcParams.update(
     {
         "font.family": "sans",
@@ -37,30 +36,8 @@ plt.rcParams.update(
     }
 )
 
-# Min DF Sweep Range
-min_dfs = [
-    1,
-    2,
-    5,
-    12,
-    19,
-    26,
-    34,
-    43,
-    55,
-    69,
-    82,
-    90,
-    97,
-    114,
-    128,
-    143,
-    164,
-    197,
-    226,
-    240,
-    308,
-]
+# min_samples sweep - similar to min_df
+min_samples_list = pbmc68k_utils.get_min_samples_sweep()
 num_markers = 40
 
 colors = {
@@ -80,96 +57,80 @@ linewidth_marker = {"streaming": 0, "sparse": 0, "quantum": 0}
 
 
 def get_pca_results_full():
-    # 1. Load Data
-    print("Loading Dorothea data...")
-    try:
-        X_full, _ = dorothea_utils.load_dorothea_data(valid=True)
-    except FileNotFoundError:
-        print("Valid set issues, loading only train")
-        X_full, _ = dorothea_utils.load_dorothea_data(valid=False)
+    # 1. Load Full Data (binary classification)
+    tqdm.write("Loading PBMC68k dataset (binary classification)...")
+    X_full, y, label_names = pbmc68k_utils.load_pbmc68k_data(
+        min_samples=1, normalize=True, binary=False
+    )
+    tqdm.write(f"Dataset shape: {X_full.shape}, Classes: {label_names}")
 
-    X_full = X_full.astype(np.float64)
+    # Compute "Ground Truth" (Full Dimension)
+    tqdm.write("Computing Top Singular Vector (Ground Truth)...")
+    _, _, vt_full = svds(X_full.asfptype(), k=1)
+    v_full = vt_full[0]
 
-    # 2. Compute "Ground Truth" (Full Dimension)
-    print("Computing Top Singular Vector (Ground Truth)...")
-    # Dorothea is 1150 x 100000. SVD is feasible.
-    try:
-        _, _, vt_full = svds(X_full, k=1)
-        v_full = vt_full[0]  # type: ignore # Shape (D,)
-    except Exception as e:
-        print(f"SVD failed: {e}")
-        raise e
-
-    # Max Norm Squared
+    # Max Norm Squared (energy of the top component)
     var_max = np.linalg.norm(X_full @ v_full) ** 2
+    D_full = X_full.shape[1]
 
-    # Pre-compute document frequencies
-    print("Computing document frequencies...")
-    X_bin = X_full.copy()
-    X_bin.data[:] = 1
-    doc_freqs = np.array(X_bin.sum(axis=0)).flatten()
-    del X_bin
-
+    # Storage
     results = {
-        "min_dfs": [],
+        "min_samples": [],
         "space_streaming": [],
         "space_sparse": [],
         "space_quantum": [],
         "variance_recovery": [],
     }
 
-    tqdm.write("Sweeping min_df for Dorothea...")
+    tqdm.write("Sweeping min_samples for PBMC68k...")
 
-    for mdf in tqdm(min_dfs, desc="min_df Sweep"):
-        keep_mask = doc_freqs >= mdf
-        keep_indices = np.where(keep_mask)[0]
+    for min_samp in tqdm(min_samples_list, desc="min_samples Sweep"):
+        # Filter genes by min_samples
+        X_trunc, gene_indices = pbmc68k_utils.filter_genes_by_frequency(
+            X_full, min_samp
+        )
 
-        if len(keep_indices) == 0:
-            print(f"Skipping min_df={mdf} (0 features kept)")
+        # Skip if no genes remain
+        if X_trunc.shape[1] == 0:
             continue
 
-        X_trunc = X_full[:, keep_indices]  # type: ignore
-
-        shape = X_trunc.shape
+        shape = X_trunc.get_shape()
         feature_dim = shape[1]
         num_samples = shape[0]
 
-        row_sparsity = int(X_trunc.getnnz(axis=1).max()) if shape[0] > 0 else 0
-        col_sparsity = int(X_trunc.getnnz(axis=0).max()) if shape[1] > 0 else 0
+        # Sparsity calculation
+        row_sparsity = int(X_trunc.getnnz(axis=1).max())
+        col_sparsity = int(X_trunc.getnnz(axis=0).max())
         sparsity = max(row_sparsity, col_sparsity)
 
+        # --- Space Calculations ---
         space_stream = feature_dim
         space_sparse = X_trunc.getnnz()
+
         space_quantum = (
-            2 * np.ceil(np.log2(num_samples + feature_dim + 1))
-            + np.ceil(np.log2(sparsity + 1))
+            2 * np.ceil(np.log2(num_samples + feature_dim))
+            + np.ceil(np.log2(sparsity))
             + 4
         )
 
-        if min(shape) <= 1:
-            if shape[1] == 1:
-                # 1 feature: direction is [1.0]
-                v_trunc = np.array([1.0])
-            else:
-                print(f"Skipping min_df={mdf} (Dimensions too small: {shape})")
-                continue
-        else:
-            try:
-                _, _, vt_trunc = svds(X_trunc, k=1)
-                v_trunc = vt_trunc[0]  # type: ignore
-            except Exception as e:
-                print(f"SVD failed for shape {shape}: {e}")
-                continue
+        # --- SVD Calculation (Sparse) ---
+        _, _, vt_trunc = svds(X_trunc.asfptype(), k=1)
+        v_trunc = vt_trunc[0]
 
-        v_lifted = np.zeros(X_full.shape[1])  # type: ignore
-        v_lifted[keep_indices] = v_trunc
+        # --- Variance Recovery Calculation ---
+        # Lift to Full Space
+        v_lifted = np.zeros(D_full)
+        v_lifted[gene_indices] = v_trunc
+
+        # Normalize lifted vector
         norm = np.linalg.norm(v_lifted)
         v_lifted = v_lifted / norm
 
+        # Variance (Energy) Captured
         var_captured = np.linalg.norm(X_full @ v_lifted) ** 2
         recovery = var_captured / var_max
 
-        results["min_dfs"].append(mdf)
+        results["min_samples"].append(min_samp)
         results["space_streaming"].append(space_stream)
         results["space_sparse"].append(space_sparse)
         results["space_quantum"].append(space_quantum)
@@ -181,14 +142,22 @@ def get_pca_results_full():
 def plot_parametric_hybrid(
     x_mean, y_mean, color, marker, label, linewidth, marker_size
 ):
-    # No Standard Deviation bands for single dataset run
-
-    # 1. Line
+    # Line
     plt.plot(x_mean, y_mean, linestyle="-", color=color, linewidth=1.5, alpha=0.9)
 
+    # Markers
+    x_min, x_max = np.min(x_mean), np.max(x_mean)
+    target_x = np.linspace(x_min, x_max, num=num_markers)
+    marker_indices = []
+    for tx in target_x:
+        idx = (np.abs(x_mean - tx)).argmin()
+        if idx not in marker_indices:
+            marker_indices.append(idx)
+    marker_indices += [-5, -10, -15, -20]
+
     plt.scatter(
-        np.array(x_mean),
-        np.array(y_mean),
+        np.array(x_mean)[marker_indices],
+        np.array(y_mean)[marker_indices],
         marker=marker,
         color=color,
         label=label,
@@ -209,31 +178,33 @@ def get_sorted_arrays(x_mean, y_mean):
 def run_analysis(load_file=None):
     keys = ["streaming", "sparse", "quantum"]
 
-    if load_file:
+    if load_file is not None:
         print(f"Loading analysis from {load_file}...")
         with open(load_file, "r") as f:
-            data_to_save = json.load(f)
-        raw_data = data_to_save["raw_data_by_min_df"]
-        mdfs = sorted([int(k) for k in raw_data.keys()])
+            data = json.load(f)
+        raw_data = data["raw_data_by_min_samples"]
+        min_samps = sorted([int(k) for k in raw_data.keys()])
 
         final_stats = {k: {"mean_space": [], "mean_var": []} for k in keys}
-        for m in mdfs:
-            entry = raw_data[str(m)]
+
+        for ms in min_samps:
             for k in keys:
-                final_stats[k]["mean_space"].append(entry[k]["space"])
-                final_stats[k]["mean_var"].append(entry[k]["variance_recovery"])
+                final_stats[k]["mean_space"].append(raw_data[str(ms)][k]["space"])
+                final_stats[k]["mean_var"].append(
+                    raw_data[str(ms)][k]["variance_recovery"]
+                )
 
     else:
-        print("Running Analysis on Dorothea Dataset...")
+        print("Running PCA Analysis on PBMC68k Dataset (Binary Classification)...")
         results = get_pca_results_full()
-
-        data_to_save = {"dataset": "Dorothea", "raw_data_by_min_df": {}}
 
         final_stats = {k: {"mean_space": [], "mean_var": []} for k in keys}
 
-        for i, mdf in enumerate(results["min_dfs"]):
-            mdf_str = str(mdf)
-            data_to_save["raw_data_by_min_df"][mdf_str] = {}
+        data_to_save = {"dataset": "PBMC68k (Binary)", "raw_data_by_min_samples": {}}
+
+        for i, ms in enumerate(results["min_samples"]):
+            ms_str = str(ms)
+            data_to_save["raw_data_by_min_samples"][ms_str] = {}
 
             for k in keys:
                 space = results[f"space_{k}"][i]
@@ -242,14 +213,14 @@ def run_analysis(load_file=None):
                 final_stats[k]["mean_space"].append(space)
                 final_stats[k]["mean_var"].append(rec)
 
-                data_to_save["raw_data_by_min_df"][mdf_str][k] = {
+                data_to_save["raw_data_by_min_samples"][ms_str][k] = {
                     "space": space,
                     "variance_recovery": rec,
                 }
 
-        with open("dorothea_size_vs_variance.json", "w") as f:
+        with open("pbmc68k_size_vs_variance.json", "w") as f:
             json.dump(data_to_save, f, indent=2)
-        print("Saved raw data to dorothea_size_vs_variance.json")
+        print("Saved raw data to pbmc68k_size_vs_variance.json")
 
     # Plot
     plt.figure(figsize=figsize)
@@ -258,9 +229,6 @@ def run_analysis(load_file=None):
             final_stats[k]["mean_var"],
             final_stats[k]["mean_space"],
         )
-        ind = (xm >= 0.1) * (xm <= 1)
-        xm = xm[ind]
-        ym = ym[ind]
         plot_parametric_hybrid(
             xm,
             ym,
@@ -272,17 +240,19 @@ def run_analysis(load_file=None):
         )
 
     halo = [pe.withStroke(linewidth=3, foreground="white")]
+
     plt.text(
-        0.15,
-        8e5,
+        1,
+        1e6,
         "Classical sparse / QRAM",
         color=colors["sparse"],
         fontsize=10,
         path_effects=halo,
+        ha="right",
     )
     plt.text(
-        0.9,
-        4e4,
+        0.996,
+        1.5e4,
         "Classical streaming",
         color=colors["streaming"],
         fontsize=10,
@@ -291,7 +261,7 @@ def run_analysis(load_file=None):
     )
     plt.text(
         1,
-        1.4e1,
+        2e1,
         "Quantum oracle sketching",
         color=colors["quantum"],
         fontsize=10,
@@ -300,28 +270,29 @@ def run_analysis(load_file=None):
     )
 
     plt.yscale("log")
-    plt.ylim(1e1, 2e6)
+    plt.ylim(1e1, 1e7)
     plt.xlabel("Relative explained variance")
+
     plt.xticks(
-        [0.2, 0.4, 0.6, 0.8, 1.0],
-        ["20%", "40%", "60%", "80%", "100%"],
+        [0.92, 0.94, 0.96, 0.98, 1],
+        ["92%", "94%", "96%", "98%", "100%"],
     )
-    plt.xlim(0.08, 1.05)
+    plt.xlim(0.915, 1.005)
+
     plt.tick_params(direction="in", which="both", top=False, right=True)
     ax = plt.gca()
     ax.set_ylabel("Machine size")
     ax.tick_params(axis="y")
-
     plt.grid(True, which="major", ls="-", alpha=0.1)
-    plt.title("Dimension reduction (Dorothea)")
+    plt.title("Dimension reduction")
     plt.tight_layout()
-    plt.savefig("dorothea_size_vs_variance.pdf")
-    print("Saved dorothea_size_vs_variance.pdf")
+    plt.savefig("pbmc68k_size_vs_variance.pdf")
+    print("Saved pbmc68k_size_vs_variance.pdf")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Dorothea Machine Size vs Variance Analysis"
+        description="PBMC68k Machine Size vs Variance Analysis"
     )
     parser.add_argument(
         "--load", type=str, default=None, help="Load analysis data from JSON file"

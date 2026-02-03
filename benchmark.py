@@ -11,16 +11,17 @@ import qos
 import qsvt
 import utils
 
-# Publication-style plotting defaults (serif + larger sizes).
 plt.rcParams.update(
     {
-        "font.family": "serif",
-        "font.serif": ["STIXGeneral", "Times New Roman", "Times"],
+        # "font.family": "serif",
+        # "font.serif": ["STIXGeneral", "Times New Roman", "Times"],
+        "font.family": "sans",
+        "font.serif": ["Google Sans"],
         "mathtext.fontset": "stix",
         "font.size": 12,
         "axes.titlesize": 14,
         "axes.labelsize": 12,
-        "legend.fontsize": 10,
+        "legend.fontsize": 9,
         "xtick.labelsize": 10,
         "ytick.labelsize": 10,
         "figure.dpi": 150,
@@ -36,6 +37,10 @@ plt.rcParams.update(
         "ytick.major.size": 3,
     }
 )
+
+cmap = plt.get_cmap("Oranges")
+color_indices = jnp.linspace(0.35, 1.0, 4)
+colors = [cmap(i) for i in color_indices]
 
 # arcsin QSVT for general state sketching
 arcsin_degree = 20
@@ -279,7 +284,7 @@ def plot_benchmark_results(
             yerr=error_std_list,
             fmt="o",
             label=rf"${dim_label} = {dim}$",
-            color=rf"C{color_counter}",
+            color=colors[color_counter],
             capsize=5,
         )
         if fit is not None:
@@ -290,12 +295,7 @@ def plot_benchmark_results(
                 * (dim_transform(dim) ** fit["alpha"])
                 / (num_samples_fit ** fit["beta"])
             )
-            plt.plot(
-                num_samples_fit,
-                error_fit,
-                "-",
-                color=f"C{color_counter}",
-            )
+            plt.plot(num_samples_fit, error_fit, "-", color=colors[color_counter])
             color_counter += 1
 
     fit_handles = None
@@ -311,7 +311,7 @@ def plot_benchmark_results(
     plt.yscale("log")
     plt.xlabel(r"Number of samples $M$")
     plt.ylabel(r"Error $\epsilon$")
-    plt.title(title)
+    # plt.title(title)
     # 1. Turn on Major Grid (Darker)
     plt.grid(True, which="major", linestyle="-", linewidth=0.8, color="gray", alpha=0.4)
     # 2. Turn on Minor Grid (Lighter & Subtle)
@@ -386,7 +386,7 @@ if __name__ == "__main__":
     # 1. benchmark flat vector quantum state sketch
     print("-" * 40)
     print("Benchmarking quantum state sketch for flat vectors...")
-    dim_list = 100 * jnp.arange(1, 11)
+    dim_list = [125, 250] + list(100 * jnp.arange(1, 11))
     unit_num_samples_list = (10 ** jnp.linspace(5, 8, num=10)).astype(int)
     repetition = 100
     print("Dimensions:", dim_list)
@@ -401,7 +401,7 @@ if __name__ == "__main__":
     plot_benchmark_results(
         results,
         "Quantum State Sketching: Flat Vector",
-        dim_list=[100, 200, 500, 1000],
+        dim_list=[125, 250, 500, 1000],
         fit=fit,
         save_path="benchmark_flat_vector.pdf",
     )
@@ -411,7 +411,7 @@ if __name__ == "__main__":
     print("Benchmarking quantum state sketch for general vectors...")
     # general quantum state sketch works internally by padding dimension to next power of 2
     # so to fit the sample complexity correctly we use dimensions that are powers of 2
-    dim_list = 100 * jnp.arange(1, 11)
+    dim_list = [125, 250] + list(100 * jnp.arange(1, 11))
     unit_num_samples_list = (10 ** jnp.linspace(5, 8, num=10)).astype(int)
     repetition = 10
     print("Dimensions:", dim_list)
@@ -426,7 +426,7 @@ if __name__ == "__main__":
     plot_benchmark_results(
         results,
         "Quantum State Sketching: General Vector",
-        dim_list=[100, 200, 500, 1000],
+        dim_list=[125, 250, 500, 1000],
         fit=fit,
         save_path="benchmark_general_vector.pdf",
     )
@@ -434,7 +434,7 @@ if __name__ == "__main__":
     # 3. benchmark boolean function oracle sketch
     print("-" * 40)
     print("Benchmarking oracle sketch for boolean functions...")
-    dim_list = 100 * jnp.arange(1, 11)
+    dim_list = [125, 250] + list(100 * jnp.arange(1, 11))
     unit_num_samples_list = (10 ** jnp.linspace(5, 8, num=10)).astype(int)
     repetition = 100
     print("Dimensions:", dim_list)
@@ -453,7 +453,7 @@ if __name__ == "__main__":
     plot_benchmark_results(
         results,
         "Quantum Oracle Sketching: Boolean Functions",
-        dim_list=[100, 200, 500, 1000],
+        dim_list=[125, 250, 500, 1000],
         fit=fit,
         save_path="benchmark_boolean_function.pdf",
     )
@@ -462,7 +462,7 @@ if __name__ == "__main__":
     print("-" * 40)
     print("Benchmarking oracle sketch for sparse matrix element oracle...")
     dim = 100
-    nnz_list = jnp.array([200, 300, 400, 500, 600, 800, 1000, 1200, 1500, 2000])
+    nnz_list = jnp.array([250, 300, 400, 500, 600, 800, 1000, 1200, 1500, 2000])
     unit_num_samples_list = (10 ** jnp.linspace(5, 8, num=10)).astype(int)
     repetition = 200
     print(f"Dimensions (square matrix): {dim} x {dim}, NNZ: ", nnz_list)
@@ -481,14 +481,15 @@ if __name__ == "__main__":
     plot_benchmark_results(
         results,
         "Quantum Oracle Sketching: Sparse Matrix Element",
-        dim_list=[200, 500, 1000, 2000],
+        dim_list=[250, 500, 1000, 2000],
         fit=fit,
         save_path="benchmark_matrix_element.pdf",
-        dim_label=r"N_{nnz}",
-        dim_fit_label=r"N_{nnz}",
+        dim_label=r"N_{\mathrm{nnz}}",
+        dim_fit_label=r"N_{\mathrm{nnz}}",
     )
 
     # 5. benchmark sparse matrix row index oracle sketch
+    # row sparsity fixed = 8, vary dimension x dimension
     print("-" * 40)
     print("Benchmarking oracle sketch for sparse matrix row index oracle...")
     dim_list = [50, 100, 200, 300, 400, 500]

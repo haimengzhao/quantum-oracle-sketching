@@ -32,63 +32,6 @@ plt.rcParams.update(
     }
 )
 
-min_dfs = [
-    2,
-    3,
-    4,
-    5,
-    6,
-    7,
-    8,
-    9,
-    11,
-    12,
-    14,
-    16,
-    19,
-    21,
-    24,
-    28,
-    32,
-    36,
-    42,
-    48,
-    55,
-    62,
-    71,
-    81,
-    93,
-    106,
-    122,
-    139,
-    159,
-    181,
-    207,
-    236,
-    270,
-    308,
-    352,
-    402,
-    459,
-    524,
-    599,
-    684,
-    781,
-    891,
-    1018,
-    1162,
-    1327,
-    1515,
-    1730,
-    1976,
-    2256,
-    2576,
-    2941,
-    3358,
-    3835,
-    4379,
-    5000,
-]
 num_markers = 40
 
 colors = {
@@ -119,7 +62,6 @@ def plot_parametric_hybrid(
     marker_size,
     accuracy_panel=True,
 ):
-    # Conditionally fill between if std is present/meaningful
     if x_std is not None and np.any(x_std > 0):
         ax.fill_betweenx(
             y_mean,
@@ -130,21 +72,19 @@ def plot_parametric_hybrid(
             edgecolor="none",
         )
 
-    # 1. Line
     ax.plot(x_mean, y_mean, linestyle="-", color=color, linewidth=1.5, alpha=0.9)
 
-    # 2. Markers
-    x_min, x_max = np.min(x_mean), np.max(x_mean)
-    target_x = np.linspace(x_min, x_max, num=num_markers)
-    marker_indices = []
-    for tx in target_x:
-        idx = (np.abs(x_mean - tx)).argmin()
-        if idx not in marker_indices:
-            marker_indices.append(idx)
     if accuracy_panel:
-        marker_indices += [-1, -3, -9, -13, -18, -21, -28]
+        marker_indices = np.arange(len(x_mean))
     else:
-        marker_indices += [-2, -5, -10, -15, -19, -24]
+        x_min, x_max = np.min(x_mean), np.max(x_mean)
+        target_x = np.linspace(x_min, x_max, num=num_markers)
+        marker_indices = []
+        for tx in target_x:
+            idx = (np.abs(x_mean - tx)).argmin()
+            if idx not in marker_indices:
+                marker_indices.append(idx)
+        marker_indices += [-5, -10, -15, -20]
 
     ax.scatter(
         x_mean[marker_indices],
@@ -180,19 +120,16 @@ def compute_stats_from_json(data, metric_type):
         for k in keys
     }
 
-    raw_data = data["raw_data_by_min_df"]
+    raw_data = data["raw_data_by_min_samples"]
+    min_samps = sorted([int(k) for k in raw_data.keys()])
 
-    # Need to sort keys
-    mdfs = sorted([int(k) for k in raw_data.keys()])
-
-    for mdf in mdfs:
+    for ms in min_samps:
         for k in keys:
-            entry = raw_data[str(mdf)][k]
+            entry = raw_data[str(ms)][k]
 
-            # Space is single value
             space = float(entry["space"])
             final_stats[k]["mean_space"].append(space)
-            final_stats[k]["std_space"].append(0.0)  # Single run
+            final_stats[k]["std_space"].append(0.0)
 
             if metric_type == "accuracy":
                 acc_mean = float(entry["accuracy_mean"])
@@ -203,9 +140,8 @@ def compute_stats_from_json(data, metric_type):
             elif metric_type == "variance":
                 var_rec = float(entry["variance_recovery"])
                 final_stats[k]["mean_x"].append(var_rec)
-                final_stats[k]["std_x"].append(0.0)  # Single run
+                final_stats[k]["std_x"].append(0.0)
 
-    # Convert lists to numpy arrays
     for k in keys:
         for field in final_stats[k]:
             final_stats[k][field] = np.array(final_stats[k][field])
@@ -236,17 +172,18 @@ def plot_accuracy_panel(ax, stats):
         )
 
     halo = [pe.withStroke(linewidth=3, foreground="white")]
+
     ax.text(
-        0.70,
-        4e6,
+        0.81,
+        2e6,
         "Classical sparse / QRAM",
         color=colors["sparse"],
         fontsize=10,
         path_effects=halo,
     )
     ax.text(
-        0.88,
-        9e4,
+        0.888,
+        1.2e4,
         "Classical streaming",
         color=colors["streaming"],
         fontsize=10,
@@ -255,7 +192,7 @@ def plot_accuracy_panel(ax, stats):
     )
     ax.text(
         0.90,
-        1.9e1,
+        1.7e1,
         "Quantum oracle sketching",
         color=colors["quantum"],
         fontsize=10,
@@ -266,9 +203,11 @@ def plot_accuracy_panel(ax, stats):
     ax.set_yscale("log")
     ax.set_ylim(1e1, 1e7)
     ax.set_xlabel("Accuracy")
-    ax.set_xticks([0.70, 0.75, 0.80, 0.85, 0.90])
-    ax.set_xticklabels(["70%", "75%", "80%", "85%", "90%"])
-    ax.set_xlim(0.69, 0.91)
+
+    ax.set_xticks([0.80, 0.82, 0.84, 0.86, 0.88, 0.90])
+    ax.set_xticklabels(["80%", "82%", "84%", "86%", "88%", "90%"])
+    ax.set_xlim(0.795, 0.915)
+
     ax.set_ylabel("Machine size")
     ax.tick_params(direction="in", which="both", top=False, right=True)
     ax.grid(True, which="major", ls="-", alpha=0.1)
@@ -280,7 +219,7 @@ def plot_variance_panel(ax, stats):
     for k in keys:
         xm, xs, ym, ys = get_sorted_arrays(
             stats[k]["mean_x"],
-            stats[k]["std_x"],  # Will be zeros
+            stats[k]["std_x"],
             stats[k]["mean_space"],
             stats[k]["std_space"],
         )
@@ -295,21 +234,22 @@ def plot_variance_panel(ax, stats):
             labels[k],
             linewidth_marker[k],
             markersize[k],
-            accuracy_panel=False,
         )
 
     halo = [pe.withStroke(linewidth=3, foreground="white")]
+
     ax.text(
-        0.75,
-        4e6,
+        1,
+        1e6,
         "Classical sparse / QRAM",
         color=colors["sparse"],
         fontsize=10,
         path_effects=halo,
+        ha="right",
     )
     ax.text(
-        0.99,
-        9e4,
+        0.996,
+        1.2e4,
         "Classical streaming",
         color=colors["streaming"],
         fontsize=10,
@@ -318,7 +258,7 @@ def plot_variance_panel(ax, stats):
     )
     ax.text(
         1,
-        1.9e1,
+        1.7e1,
         "Quantum oracle sketching",
         color=colors["quantum"],
         fontsize=10,
@@ -329,9 +269,11 @@ def plot_variance_panel(ax, stats):
     ax.set_yscale("log")
     ax.set_ylim(1e1, 1e7)
     ax.set_xlabel("Relative explained variance")
-    ax.set_xticks([0.75, 0.8, 0.85, 0.9, 0.95, 1.0])
-    ax.set_xticklabels(["75%", "80%", "85%", "90%", "95%", "100%"])
-    ax.set_xlim(0.73, 1.03)
+
+    ax.set_xticks([0.92, 0.94, 0.96, 0.98, 1.0])
+    ax.set_xticklabels(["92%", "94%", "96%", "98%", "100%"])
+    ax.set_xlim(0.915, 1.005)
+
     ax.tick_params(direction="in", which="both", top=False, right=True)
     ax.grid(True, which="major", ls="-", alpha=0.1)
     ax.set_title("Dimension reduction")
@@ -339,24 +281,24 @@ def plot_variance_panel(ax, stats):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Combine IMDB size-vs-accuracy and size-vs-variance plots."
+        description="Combine PBMC68k size-vs-accuracy and size-vs-variance plots."
     )
     parser.add_argument(
         "--accuracy-json",
         type=str,
-        default="imdb_size_vs_accuracy.json",
+        default="pbmc68k_size_vs_accuracy.json",
         help="Path to accuracy JSON file.",
     )
     parser.add_argument(
         "--variance-json",
         type=str,
-        default="imdb_size_vs_variance.json",
+        default="pbmc68k_size_vs_variance.json",
         help="Path to variance JSON file.",
     )
     parser.add_argument(
         "--out",
         type=str,
-        default="imdb_size_vs_accuracy_and_variance.pdf",
+        default="pbmc68k_combine.pdf",
         help="Output figure path.",
     )
     args = parser.parse_args()
