@@ -4,6 +4,8 @@ Code repository for the numerical experiments in our paper "Processing massive c
 
 This repo contains:
 - Core implementations of **quantum oracle sketching** in JAX.
+- A tutorial that walk you through the basic usage of quantum oracle sketching.
+- JAX implementation of quantum singular value transform (QSVT), including amplitude amplification, inversion, threshold, etc.
 - A benchmark suite for quantum oracle and state sketching.
 - Real-dataset experiments (classification and dimension reduction) for demonstrating the exponential memory advantage.
 
@@ -146,19 +148,6 @@ python splice_combine_fig.py
 - PBMC68k: loaded via `scvelo.datasets.pbmc68k` (downloaded/cached automatically).
 - Dorothea: download manually from UCI (https://archive.ics.uci.edu/static/public/169/dorothea.zip) and extract to `data_cache/dorothea` (relative to where you run scripts).
 - Splice: fetched via `ucimlrepo` (dataset id 69).
-
-## What is Being Compared
-
-The real-dataset scripts compare machine size for three families:
-- Classical sparse / QRAM-style storage (lower bounded by nonzeros): `S >= N_nnz`
-- Classical streaming (lower bounded by solution vector size): `S >= D`
-- Quantum oracle sketching (qubit count + one classical scalar accumulator)
-
-Implemented QOS size formulas in scripts:
-- LS-SVM: `S_QOS = 2*ceil(log2(N + 2D)) + ceil(log2(s + 1)) + 3 + 1`
-- PCA: `S_QOS = 2*ceil(log2(N + D)) + ceil(log2(s)) + 3 + 1`
-
-Here `N` is sample count, `D` feature dimension, and `s` matrix sparsity.
 
 ## Core Files and Roles
 
