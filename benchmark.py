@@ -178,9 +178,6 @@ def benchmark_random_sparse_matrix_element(
 
 def benchmark_random_sparse_matrix_row_index(key, dim, unit_num_samples, repetition=10):
     key, subkey = random.split(key)
-    # sparse_matrix = utils.random_sparse_matrix_constant_magnitude(
-    #     subkey, (dim, dim), nnz=3 * dim, magnitude=1, batch_size=repetition
-    # )
     sparse_matrix = utils.random_sparse_matrix_given_row_sparsity(
         subkey, (dim, dim), row_sparsity=8, batch_size=repetition
     )

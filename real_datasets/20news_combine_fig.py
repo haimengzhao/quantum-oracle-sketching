@@ -269,7 +269,7 @@ def main():
     parser.add_argument(
         "--out",
         type=str,
-        default="20newsgroups_size_vs_accuracy_and_variance.pdf",
+        default="20newsgroups_combine.pdf",
         help="Output figure path.",
     )
     args = parser.parse_args()

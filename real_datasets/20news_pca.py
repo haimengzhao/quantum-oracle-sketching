@@ -125,7 +125,6 @@ def get_pca_results(categories):
         sparsity = max(row_sparsity, col_sparsity)
 
         # --- Space Calculations ---
-        # --- Space Calculations ---
         # Any classical streaming algorithm must at least store the principal component,
         #    which is of size d. So classical streaming space is d floats.
         # Any classical standard algorithm that stores the whole sparse matrix
@@ -138,7 +137,7 @@ def get_pca_results(categories):
         #    Its Hermitian dilation is in R^{(n+d) x (n+d)}. This requires building the
         #    sparse index/element oracle for the dilated matrix, which has sparsity = sparsity.
         #    Hence, building index oracle requires 2log2(n+d) + log2(sparsity) + 2 (QSVT & binary search output) qubits.
-        #    Building element oracle requires can reuse the same qubits, so no extra qubits needed.
+        #    Building element oracle can reuse the same qubits, so no extra qubits needed.
         # 2. The state preparation unitary block encoding of the guiding vector g in R^d, which
         #    requires log2(d) + 2 (first LCU+QSVT and second LCU) qubits. These qubits are contained
         #    in the previous count and they can be reused.

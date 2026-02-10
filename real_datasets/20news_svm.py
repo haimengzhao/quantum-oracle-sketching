@@ -125,7 +125,7 @@ def get_ridge_results(categories):
         #    Its Hermitian dilation is in R^{(n+2d) x (n+2d)}. This requires building the
         #    sparse index/element oracle for the augmented matrix, which has sparsity = sparsity + 1.
         #    Hence, building index oracle requires 2log2(n+2d) + log2(sparsity + 1) + 2 (QSVT & binary search output) qubits.
-        #    Building element oracle requires can reuse the same qubits, so no extra qubits needed.
+        #    Building element oracle can reuse the same qubits, so no extra qubits needed.
         # 2. The state preparation unitary block encoding of the label vector y in R^n, which
         #    requires log2(n) + 2 (first LCU+QSVT and second LCU) qubits. These qubits are contained
         #    in the previous count and they can be reused.

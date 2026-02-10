@@ -356,7 +356,7 @@ def main():
     parser.add_argument(
         "--out",
         type=str,
-        default="imdb_size_vs_accuracy_and_variance.pdf",
+        default="imdb_combine.pdf",
         help="Output figure path.",
     )
     args = parser.parse_args()
