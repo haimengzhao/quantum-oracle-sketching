@@ -1,6 +1,8 @@
 # Quantum Oracle Sketching (QOS)
 
-Code repository for our paper "Processing massive classical data on small quantum computers", where we introduce Quantum Oracle Sketching, enabling access to the classical world in quantum superposition for large-scale machine learning.
+Code repository for our paper "Exponential quantum advantage in processing massive classical data".
+
+In this work, we introduce **Quantum Oracle Sketching**, a framework that enables access to the classical world in quantum superposition for large-scale machine learning.
 
 This repo contains:
 - Core implementations of **quantum oracle sketching** in JAX.
