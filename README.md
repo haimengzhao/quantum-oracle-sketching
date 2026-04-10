@@ -1,8 +1,10 @@
 # Quantum Oracle Sketching (QOS)
 
-Code repository for our paper "Exponential quantum advantage in processing massive classical data".
+Code repository for our paper ["Exponential quantum advantage in processing massive classical data"](https://arxiv.org/abs/2604.07639).
 
 In this work, we introduce **Quantum Oracle Sketching**, a framework that enables access to the classical world in quantum superposition for large-scale machine learning.
+
+See the blog post at [Quantum Frontiers](https://quantumfrontiers.com/2026/04/09/unleashing-the-advantage-of-quantum-ai/) for an introduction.
 
 This repo contains:
 - Core implementations of **quantum oracle sketching** in JAX.
@@ -169,3 +171,14 @@ python splice_combine_fig.py
 ## Citation
 
 If you find this repository useful, please consider citing our paper.
+
+'''
+@article{zhao2026exponential,
+    title={{Exponential Quantum Advantage in Processing Massive Classical Data}},
+    author={Haimeng Zhao and Alexander Zlokapa and Hartmut Neven and Ryan Babbush and John Preskill and Jarrod R. McClean and Hsin-Yuan Huang},
+    journal={},
+    eprint={2604.07639},
+    archivePrefix={arXiv},
+    year={2026}
+}
+'''
