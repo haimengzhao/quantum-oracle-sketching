@@ -172,13 +172,13 @@ python splice_combine_fig.py
 
 If you find this repository useful, please consider citing our paper.
 
-'''
+```
 @article{zhao2026exponential,
-    title={{Exponential Quantum Advantage in Processing Massive Classical Data}},
+    title={Exponential quantum advantage in processing massive classical data},
     author={Haimeng Zhao and Alexander Zlokapa and Hartmut Neven and Ryan Babbush and John Preskill and Jarrod R. McClean and Hsin-Yuan Huang},
     journal={},
     eprint={2604.07639},
     archivePrefix={arXiv},
     year={2026}
 }
-'''
+```
