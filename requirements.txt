@@ -7,4 +7,3 @@ scikit-learn==1.8.0
 scipy==1.16.3
 tqdm==4.67.1
 scvelo==0.3.3
-ucimlrepo==0.0.7
