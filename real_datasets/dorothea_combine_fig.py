@@ -1,243 +1,41 @@
+"""Combined two-panel Dorothea figure: classification and dimension reduction.
+
+Loads the accuracy and variance sweep JSONs written by dorothea_svm.py and
+dorothea_pca.py and draws both panels side by side; mode bucket_jl
+additionally overlays the sparse-JL streaming curve on the bucket panels.
+"""
+
 import argparse
 import json
 
-import bucket_utils
 import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 import numpy as np
+import sketch_utils
+import sweep_utils
 
 np.random.seed(42)
-
-plt.rcParams.update(
-    {
-        "font.family": "sans",
-        "font.serif": ["Google Sans"],
-        "mathtext.fontset": "stix",
-        "font.size": 12,
-        "axes.titlesize": 14,
-        "axes.labelsize": 12,
-        "legend.fontsize": 10,
-        "xtick.labelsize": 10,
-        "ytick.labelsize": 10,
-        "figure.dpi": 150,
-        "savefig.dpi": 300,
-        "figure.figsize": (3.5, 2.5),
-        "axes.linewidth": 0.8,
-        "lines.linewidth": 1.2,
-        "lines.markersize": 4,
-        "legend.frameon": True,
-        "xtick.direction": "in",
-        "ytick.direction": "in",
-        "xtick.major.size": 3,
-        "ytick.major.size": 3,
-    }
-)
-
-num_markers = 40
-
-colors = {
-    "quantum": "#CD591A",
-    "streaming": "#2657AF",
-    "sparse": "#606060",
-    "jl_streaming": "#2A8C55",
-}
-labels = {
-    "streaming": "Classical streaming",
-    "sparse": "Classical sparse / QRAM",
-    "quantum": "Quantum oracle sketching",
-    "jl_streaming": "Classical sparse JL",
-}
-markers = {"streaming": "P", "sparse": "X", "quantum": "D", "jl_streaming": "o"}
-markersize = {"streaming": 50, "sparse": 50, "quantum": 30, "jl_streaming": 42}
-linewidth_marker = {"streaming": 0, "sparse": 0, "quantum": 0, "jl_streaming": 0}
-
-
-def streaming_label_for_mode(mode):
-    if mode == "bucket":
-        return "Classical feature hashing"
-    if mode == "jl":
-        return "Classical sparse JL"
-    return labels["streaming"]
-
-
-def plot_parametric_hybrid(
-    ax,
-    x_mean,
-    x_std,
-    y_mean,
-    color,
-    marker,
-    label,
-    linewidth,
-    marker_size,
-    mode="rare",
-):
-    # 1. Horizontal Tube (Accuracy SEM/STD)
-    if x_std is not None and np.any(x_std > 0):
-        ax.fill_betweenx(
-            y_mean,
-            x_mean - x_std,
-            x_mean + x_std,
-            color=color,
-            alpha=0.2,
-            edgecolor="none",
-        )
-
-    # 2. Line
-    ax.plot(x_mean, y_mean, linestyle="-", color=color, linewidth=1.5, alpha=0.9)
-
-    marker_indices = np.arange(len(x_mean))
-
-    ax.scatter(
-        x_mean[marker_indices],
-        y_mean[marker_indices],
-        marker=marker,
-        color=color,
-        label=label,
-        alpha=0.9,
-        s=marker_size,
-        linewidth=linewidth,
-    )
-
-
-def get_sorted_arrays(x_mean, x_std, y_mean):
-    data = sorted(zip(x_mean, x_std, y_mean), key=lambda x: x[2])
-    return (
-        np.array([d[0] for d in data]),
-        np.array([d[1] for d in data]),
-        np.array([d[2] for d in data]),
-    )
-
-
-def mean_and_sem(values):
-    vals = np.array(values, dtype=float).reshape(-1)
-    return float(np.mean(vals)), float(np.std(vals) / np.sqrt(vals.size))
-
-
-def compute_stats_from_json(data, metric_type, keys=None):
-    if keys is None:
-        keys = ["streaming", "sparse", "quantum"]
-    final_stats = {
-        k: {
-            "mean_space": [],
-            "mean_x": [],
-            "std_x": [],
-        }
-        for k in keys
-    }
-
-    if "raw_data_by_n_features" in data:
-        raw_data = data["raw_data_by_n_features"]
-    else:
-        raw_data = data["raw_data_by_min_df"]
-    mdfs = sorted([int(k) for k in raw_data.keys()])
-
-    for mdf in mdfs:
-        for k in keys:
-            if k not in raw_data[str(mdf)]:
-                continue
-            entry = raw_data[str(mdf)][k]
-
-            if "space_by_seed" in entry:
-                space, _ = mean_and_sem(entry["space_by_seed"])
-            else:
-                space = float(entry["space"])
-            final_stats[k]["mean_space"].append(space)
-
-            if metric_type == "accuracy":
-                if "accuracy_scores_by_seed" in entry:
-                    acc_mean, acc_std = mean_and_sem(entry["accuracy_scores_by_seed"])
-                elif "accuracy_scores" in entry:
-                    acc_mean, acc_std = mean_and_sem(entry["accuracy_scores"])
-                elif "accuracy_mean" in entry:
-                    acc_mean = float(entry["accuracy_mean"])
-                    acc_std = float(entry.get("accuracy_sem", 0.0))
-                else:
-                    acc_mean = float(entry["accuracy"])
-                    acc_std = float(entry.get("accuracy_std", 0.0))
-                final_stats[k]["mean_x"].append(acc_mean)
-                final_stats[k]["std_x"].append(acc_std)
-
-            elif metric_type == "variance":
-                if "variance_recovery_by_seed" in entry:
-                    var_rec, var_sem = mean_and_sem(entry["variance_recovery_by_seed"])
-                else:
-                    var_rec = float(entry["variance_recovery"])
-                    var_sem = float(entry.get("variance_recovery_sem", 0.0))
-                final_stats[k]["mean_x"].append(var_rec)
-                final_stats[k]["std_x"].append(var_sem)
-
-    for k in keys:
-        for field in final_stats[k]:
-            final_stats[k][field] = np.array(final_stats[k][field])  # type: ignore
-
-    return final_stats
-
-
-def plot_jl_streaming(ax, stats):
-    xm, xs, ym = get_sorted_arrays(
-        stats["streaming"]["mean_x"],
-        stats["streaming"]["std_x"],
-        stats["streaming"]["mean_space"],
-    )
-    if xs is not None and np.any(xs > 0):
-        ax.fill_betweenx(
-            ym,
-            xm - xs,
-            xm + xs,
-            color=colors["jl_streaming"],
-            alpha=0.10,
-            edgecolor="none",
-            zorder=1,
-        )
-    ax.plot(
-        xm,
-        ym,
-        linestyle=(0, (1, 1.15)),
-        color=colors["jl_streaming"],
-        linewidth=1.8,
-        alpha=0.95,
-        dash_capstyle="round",
-        zorder=4,
-    )
-    marker_indices = np.arange(len(xm))
-    ax.scatter(
-        xm[marker_indices],
-        ym[marker_indices],
-        marker=markers["jl_streaming"],
-        facecolors="none",
-        edgecolors=colors["jl_streaming"],
-        label=labels["jl_streaming"],
-        alpha=0.98,
-        s=markersize["jl_streaming"],
-        linewidth=1.2,
-        zorder=5,
-    )
+sweep_utils.apply_plot_style()
 
 
 def plot_accuracy_panel(ax, stats, mode="rare", jl_stats=None):
-    keys = ["streaming", "sparse", "quantum"]
-    for k in keys:
-        xm, xs, ym = get_sorted_arrays(
-            stats[k]["mean_x"],
-            stats[k]["std_x"],
-            stats[k]["mean_space"],
+    for k in sweep_utils.METHOD_KEYS:
+        xm, xs, ym = sweep_utils.sort_by_space(
+            stats[k]["metric_mean"], stats[k]["metric_sem"], stats[k]["space_mean"]
         )
         ind = xm >= 0.6
-        plot_parametric_hybrid(
+        sweep_utils.plot_curve(
             ax,
+            k,
             xm[ind],
             xs[ind],
             ym[ind],
-            colors[k],
-            markers[k],
-            (streaming_label_for_mode(mode) if k == "streaming" else labels[k]),
-            linewidth_marker[k],
-            markersize[k],
-            mode=mode,
+            label=(sketch_utils.streaming_label(mode) if k == "streaming" else None),
+            show_all_markers=True,
+            fill_when_zero_err=False,
         )
     if jl_stats is not None:
-        plot_jl_streaming(ax, jl_stats)
+        sweep_utils.plot_jl_overlay(ax, jl_stats)
 
     halo = [pe.withStroke(linewidth=3, foreground="white")]
 
@@ -246,7 +44,7 @@ def plot_accuracy_panel(ax, stats, mode="rare", jl_stats=None):
             0.05,
             0.92,
             "Classical sparse / QRAM",
-            color=colors["sparse"],
+            color=sweep_utils.COLORS["sparse"],
             fontsize=10,
             path_effects=halo,
             transform=ax.transAxes,
@@ -254,8 +52,8 @@ def plot_accuracy_panel(ax, stats, mode="rare", jl_stats=None):
         ax.text(
             0.85,
             0.5,
-            streaming_label_for_mode(mode),
-            color=colors["streaming"],
+            sketch_utils.streaming_label(mode),
+            color=sweep_utils.COLORS["streaming"],
             fontsize=10,
             path_effects=halo,
             transform=ax.transAxes,
@@ -265,7 +63,7 @@ def plot_accuracy_panel(ax, stats, mode="rare", jl_stats=None):
             0.15,
             0.035,
             "Quantum oracle sketching",
-            color=colors["quantum"],
+            color=sweep_utils.COLORS["quantum"],
             fontsize=10,
             path_effects=halo,
             transform=ax.transAxes,
@@ -275,7 +73,7 @@ def plot_accuracy_panel(ax, stats, mode="rare", jl_stats=None):
                 0.6,
                 0.35,
                 "Classical sparse JL",
-                color=colors["jl_streaming"],
+                color=sweep_utils.COLORS["jl_streaming"],
                 fontsize=10,
                 path_effects=halo,
                 transform=ax.transAxes,
@@ -286,7 +84,7 @@ def plot_accuracy_panel(ax, stats, mode="rare", jl_stats=None):
             0.9,
             6e5,
             "Classical sparse / QRAM",
-            color=colors["sparse"],
+            color=sweep_utils.COLORS["sparse"],
             fontsize=10,
             path_effects=halo,
             ha="right",
@@ -294,8 +92,8 @@ def plot_accuracy_panel(ax, stats, mode="rare", jl_stats=None):
         ax.text(
             0.9,
             4e3,
-            streaming_label_for_mode(mode),
-            color=colors["streaming"],
+            sketch_utils.streaming_label(mode),
+            color=sweep_utils.COLORS["streaming"],
             fontsize=10,
             path_effects=halo,
             ha="right",
@@ -304,7 +102,7 @@ def plot_accuracy_panel(ax, stats, mode="rare", jl_stats=None):
             0.95,
             1.4e1,
             "Quantum oracle sketching",
-            color=colors["quantum"],
+            color=sweep_utils.COLORS["quantum"],
             fontsize=10,
             path_effects=halo,
             ha="right",
@@ -328,31 +126,26 @@ def plot_accuracy_panel(ax, stats, mode="rare", jl_stats=None):
 
 
 def plot_variance_panel(ax, stats, mode="rare", jl_stats=None):
-    keys = ["streaming", "sparse", "quantum"]
-    for k in keys:
-        xm, xs, ym = get_sorted_arrays(
-            stats[k]["mean_x"],
-            stats[k]["std_x"],
-            stats[k]["mean_space"],
+    for k in sweep_utils.METHOD_KEYS:
+        xm, xs, ym = sweep_utils.sort_by_space(
+            stats[k]["metric_mean"], stats[k]["metric_sem"], stats[k]["space_mean"]
         )
         if mode in ("bucket", "jl"):
             ind = (xm >= 0) * (xm <= 1)
         else:
             ind = (xm >= 0.04) * (xm <= 1)
-        plot_parametric_hybrid(
+        sweep_utils.plot_curve(
             ax,
+            k,
             xm[ind],
             xs[ind],
             ym[ind],
-            colors[k],
-            markers[k],
-            (streaming_label_for_mode(mode) if k == "streaming" else labels[k]),
-            linewidth_marker[k],
-            markersize[k],
-            mode=mode,
+            label=(sketch_utils.streaming_label(mode) if k == "streaming" else None),
+            show_all_markers=True,
+            fill_when_zero_err=False,
         )
     if jl_stats is not None:
-        plot_jl_streaming(ax, jl_stats)
+        sweep_utils.plot_jl_overlay(ax, jl_stats)
 
     halo = [pe.withStroke(linewidth=3, foreground="white")]
 
@@ -361,7 +154,7 @@ def plot_variance_panel(ax, stats, mode="rare", jl_stats=None):
             0.2,
             0.85,
             "Classical sparse / QRAM",
-            color=colors["sparse"],
+            color=sweep_utils.COLORS["sparse"],
             fontsize=10,
             path_effects=halo,
             transform=ax.transAxes,
@@ -369,8 +162,8 @@ def plot_variance_panel(ax, stats, mode="rare", jl_stats=None):
         ax.text(
             0.22,
             0.5,
-            streaming_label_for_mode(mode),
-            color=colors["streaming"],
+            sketch_utils.streaming_label(mode),
+            color=sweep_utils.COLORS["streaming"],
             fontsize=10,
             path_effects=halo,
             transform=ax.transAxes,
@@ -380,7 +173,7 @@ def plot_variance_panel(ax, stats, mode="rare", jl_stats=None):
             0.15,
             0.035,
             "Quantum oracle sketching",
-            color=colors["quantum"],
+            color=sweep_utils.COLORS["quantum"],
             fontsize=10,
             path_effects=halo,
             transform=ax.transAxes,
@@ -390,7 +183,7 @@ def plot_variance_panel(ax, stats, mode="rare", jl_stats=None):
                 0.7,
                 0.76,
                 "Classical sparse JL",
-                color=colors["jl_streaming"],
+                color=sweep_utils.COLORS["jl_streaming"],
                 fontsize=10,
                 path_effects=halo,
                 transform=ax.transAxes,
@@ -401,15 +194,15 @@ def plot_variance_panel(ax, stats, mode="rare", jl_stats=None):
             0.15,
             8e5,
             "Classical sparse / QRAM",
-            color=colors["sparse"],
+            color=sweep_utils.COLORS["sparse"],
             fontsize=10,
             path_effects=halo,
         )
         ax.text(
             0.9,
             4e4,
-            streaming_label_for_mode(mode),
-            color=colors["streaming"],
+            sketch_utils.streaming_label(mode),
+            color=sweep_utils.COLORS["streaming"],
             fontsize=10,
             path_effects=halo,
             ha="right",
@@ -418,7 +211,7 @@ def plot_variance_panel(ax, stats, mode="rare", jl_stats=None):
             1,
             1.4e1,
             "Quantum oracle sketching",
-            color=colors["quantum"],
+            color=sweep_utils.COLORS["quantum"],
             fontsize=10,
             path_effects=halo,
             ha="right",
@@ -481,10 +274,10 @@ def main():
     with open(args.variance_json, "r") as f:
         variance_data = json.load(f)
     if args.mode != "bucket_jl":
-        bucket_utils.validate_truncation_data(
+        sketch_utils.validate_truncation_data(
             accuracy_data, args.mode, args.accuracy_json
         )
-        bucket_utils.validate_truncation_data(
+        sketch_utils.validate_truncation_data(
             variance_data, args.mode, args.variance_json
         )
     jl_accuracy_data = None
@@ -502,10 +295,7 @@ def main():
         is_feature_mode = "raw_data_by_n_features" in data
         if is_feature_mode != (args.mode in ("bucket", "jl", "bucket_jl")):
             raise ValueError(f"{path} does not match --mode {args.mode}")
-        if args.mode == "bucket_jl" and data.get("truncation_mode") not in (
-            None,
-            "bucket",
-        ):
+        if args.mode == "bucket_jl" and data.get("truncation_mode") != "bucket":
             raise ValueError(f"{path} is not bucket data")
     if args.mode == "bucket_jl":
         for path, data in [
@@ -514,9 +304,9 @@ def main():
         ]:
             if "raw_data_by_n_features" not in data:
                 raise ValueError(f"{path} does not contain JL feature-sweep data")
-            if data.get("truncation_mode") not in (None, "jl"):
+            if data.get("truncation_mode") != "jl":
                 raise ValueError(f"{path} is not JL data")
-            if data.get("jl_transform") != bucket_utils.SPARSE_JL_TRANSFORM:
+            if data.get("jl_transform") != sketch_utils.SPARSE_JL_TRANSFORM:
                 raise ValueError(
                     f"{path} was not generated with balanced signed sparse JL"
                 )
@@ -532,15 +322,15 @@ def main():
             args.out = "dorothea_combine.pdf"
 
     plot_mode = "bucket" if args.mode == "bucket_jl" else args.mode
-    accuracy_stats = compute_stats_from_json(accuracy_data, "accuracy")
-    variance_stats = compute_stats_from_json(variance_data, "variance")
+    accuracy_stats = sweep_utils.load_sweep_stats(accuracy_data, "accuracy")
+    variance_stats = sweep_utils.load_sweep_stats(variance_data, "variance")
     jl_accuracy_stats = None
     jl_variance_stats = None
     if args.mode == "bucket_jl":
-        jl_accuracy_stats = compute_stats_from_json(
+        jl_accuracy_stats = sweep_utils.load_sweep_stats(
             jl_accuracy_data, "accuracy", keys=["streaming"]
         )
-        jl_variance_stats = compute_stats_from_json(
+        jl_variance_stats = sweep_utils.load_sweep_stats(
             jl_variance_data, "variance", keys=["streaming"]
         )
 

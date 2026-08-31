@@ -1,44 +1,25 @@
-import argparse
+"""Dorothea sweep: machine size vs LS-SVM classification accuracy.
+
+Ridge classification (5-fold CV) on the binary drug-discovery features,
+sweeping rare-feature truncation (min_df) or an oblivious feature sketch;
+see sweep_utils for the shared pipeline.
+"""
+
 import json
 
-import bucket_utils
 import dorothea_utils
 import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 import numpy as np
+import sketch_utils
+import sweep_utils
 from sklearn.linear_model import RidgeClassifier
 from sklearn.model_selection import cross_val_score
 from tqdm import tqdm
 
 np.random.seed(42)
+sweep_utils.apply_plot_style()
 
-# Plotting Style
-plt.rcParams.update(
-    {
-        "font.family": "sans",
-        "font.serif": ["Google Sans"],
-        "mathtext.fontset": "stix",
-        "font.size": 12,
-        "axes.titlesize": 14,
-        "axes.labelsize": 12,
-        "legend.fontsize": 10,
-        "xtick.labelsize": 10,
-        "ytick.labelsize": 10,
-        "figure.dpi": 150,
-        "savefig.dpi": 300,
-        "figure.figsize": (3.5, 2.5),
-        "axes.linewidth": 0.8,
-        "lines.linewidth": 1.2,
-        "lines.markersize": 4,
-        "legend.frameon": True,
-        "xtick.direction": "in",
-        "ytick.direction": "in",
-        "xtick.major.size": 3,
-        "ytick.major.size": 3,
-    }
-)
-
-# Min DF Sweep Range (Same as PCA)
 min_dfs = [
     1,
     2,
@@ -62,49 +43,22 @@ min_dfs = [
     240,
     308,
 ]
-bucket_n_features = [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536]
-jl_n_features = [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536]
-n_bucket_seeds = 5
-n_jl_seeds = 5
-num_markers = 40
-
-colors = {
-    "quantum": "#CD591A",
-    "streaming": "#2657AF",
-    "sparse": "#606060",
-}
-labels = {
-    "streaming": "Classical streaming",
-    "sparse": "Classical sparse / QRAM",
-    "quantum": "Quantum oracle sketching",
-}
-markers = {"streaming": "P", "sparse": "X", "quantum": "D"}
-figsize = (3.5, 3.5)
-markersize = {"streaming": 50, "sparse": 50, "quantum": 30}
-linewidth_marker = {"streaming": 0, "sparse": 0, "quantum": 0}
+sketch_n_features = [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536]
+n_sketch_seeds = 5
 
 
-def streaming_label_for_mode(mode):
-    if mode == "bucket":
-        return "Classical feature hashing"
-    if mode == "jl":
-        return "Classical sparse JL"
-    return labels["streaming"]
+def make_classifier():
+    return RidgeClassifier(
+        random_state=42, alpha=200, solver="auto", class_weight="balanced"
+    )
 
 
 def get_svm_results_full():
-    # 1. Load Data
     print("Loading Dorothea data...")
     X_full, y_full = dorothea_utils.load_dorothea_data(valid=True)
     tqdm.write(f"Dataset shape: {X_full.shape}")
-    row_sparsity = int(X_full.getnnz(axis=1).max())
-    col_sparsity = int(X_full.getnnz(axis=0).max())
-    sparsity = max(row_sparsity, col_sparsity)
-    tqdm.write(
-        f"Max row sparsity: {row_sparsity}, Max col sparsity: {col_sparsity}, Overall sparsity: {sparsity}"
-    )
 
-    # Pre-compute document frequencies
+    # Pre-compute document frequencies for the min_df filter.
     print("Computing document frequencies...")
     X_bin = X_full.copy()
     X_bin.data[:] = 1
@@ -116,16 +70,13 @@ def get_svm_results_full():
         "space_streaming": [],
         "space_sparse": [],
         "space_quantum": [],
-        "accuracies_mean": [],
-        "accuracies_std": [],
         "accuracy_scores": [],
     }
 
     tqdm.write("Sweeping min_df for Dorothea (SVM)...")
 
     for mdf in tqdm(min_dfs, desc="min_df Sweep"):
-        keep_mask = doc_freqs >= mdf
-        keep_indices = np.where(keep_mask)[0]
+        keep_indices = np.where(doc_freqs >= mdf)[0]
 
         if len(keep_indices) == 0:
             print(f"Skipping min_df={mdf} (0 features kept)")
@@ -133,309 +84,136 @@ def get_svm_results_full():
 
         X_trunc = X_full[:, keep_indices]  # type: ignore
 
-        shape = X_trunc.shape
-        feature_dim = shape[1]
-        num_samples = shape[0]
+        num_samples, feature_dim = X_trunc.shape
+        sparsity = sketch_utils.max_sparsity(X_trunc)
 
-        # Space metrics
-        row_sparsity = int(X_trunc.getnnz(axis=1).max()) if shape[0] > 0 else 0
-        col_sparsity = int(X_trunc.getnnz(axis=0).max()) if shape[1] > 0 else 0
-        sparsity = max(row_sparsity, col_sparsity)
-
-        space_stream = feature_dim
-        space_sparse = X_trunc.getnnz()
-        space_quantum = (
-            2 * np.ceil(np.log2(num_samples + feature_dim + 1))
-            + np.ceil(np.log2(sparsity + 1))
-            + 4
-        )
-
-        clf = RidgeClassifier(
-            random_state=42, alpha=200, solver="auto", class_weight="balanced"
-        )
-
-        # 5-Fold Cross Validation
-        scores = cross_val_score(clf, X_trunc, y_full, cv=5)
+        scores = cross_val_score(make_classifier(), X_trunc, y_full, cv=5)
 
         results["min_dfs"].append(mdf)
-        results["space_streaming"].append(space_stream)
-        results["space_sparse"].append(space_sparse)
-        results["space_quantum"].append(space_quantum)
-        results["accuracies_mean"].append(scores.mean())
-        results["accuracies_std"].append(scores.std() / np.sqrt(len(scores)))
+        results["space_streaming"].append(feature_dim)
+        results["space_sparse"].append(sketch_utils.matrix_nnz(X_trunc))
+        results["space_quantum"].append(
+            sweep_utils.qos_machine_size(num_samples, feature_dim, sparsity, "svm")
+        )
         results["accuracy_scores"].append([float(s) for s in scores])
 
     return results
 
 
-def get_svm_results_bucket(bucket_seeds, truncation_mode="bucket"):
+def get_svm_results_sketch(sketch_seeds, mode):
     print("Loading Dorothea data...")
     X_full, y_full = dorothea_utils.load_dorothea_data(valid=True)
     tqdm.write(f"Dataset shape: {X_full.shape}")
 
     full_dim = X_full.shape[1]
-    feature_grid = jl_n_features if truncation_mode == "jl" else bucket_n_features
-    n_features_list = [k for k in feature_grid if k < full_dim] + [full_dim]
+    n_features_list = [k for k in sketch_n_features if k < full_dim] + [full_dim]
 
     results = {
         "n_features": [],
         "space_streaming": [],
         "space_sparse": [],
         "space_quantum": [],
-        "space_streaming_by_seed": [],
-        "space_sparse_by_seed": [],
-        "space_quantum_by_seed": [],
-        "accuracies_mean": [],
-        "accuracies_std": [],
-        "accuracy_scores_by_seed": [],
+        "accuracy_scores": [],
     }
 
-    tqdm.write(f"Sweeping {truncation_mode} dimension for Dorothea (SVM)...")
+    tqdm.write(f"Sweeping {mode} sketch dimension for Dorothea (SVM)...")
 
-    for n_features in tqdm(n_features_list, desc=f"{truncation_mode} Sweep"):
+    for n_features in tqdm(n_features_list, desc=f"{mode} Sweep"):
         seed_space_streaming = []
         seed_space_sparse = []
         seed_space_quantum = []
         seed_accuracy_scores = []
 
-        for seed in bucket_seeds:
-            X_bucket, _ = bucket_utils.random_truncated_features(
-                X_full, n_features, seed=seed, mode=truncation_mode
+        for seed in sketch_seeds:
+            X_sketch, _ = sketch_utils.sketch_features(
+                X_full, n_features, mode, seed=seed
             )
 
-            feature_dim = X_bucket.shape[1]
-            num_samples = X_bucket.shape[0]
-            sparsity = bucket_utils.max_sparsity(X_bucket)
+            num_samples, feature_dim = X_sketch.shape
+            sparsity = sketch_utils.max_sparsity(X_sketch)
 
-            # Same machine-size formulas as the rare-feature path, applied to X_bucket.
             seed_space_streaming.append(feature_dim)
-            seed_space_sparse.append(bucket_utils.matrix_nnz(X_bucket))
+            seed_space_sparse.append(sketch_utils.matrix_nnz(X_sketch))
             seed_space_quantum.append(
-                2 * np.ceil(np.log2(num_samples + feature_dim + 1))
-                + np.ceil(np.log2(sparsity + 1))
-                + 4
+                sweep_utils.qos_machine_size(num_samples, feature_dim, sparsity, "svm")
             )
 
-            clf = RidgeClassifier(
-                random_state=42, alpha=200, solver="auto", class_weight="balanced"
-            )
-            scores = cross_val_score(clf, X_bucket, y_full, cv=5)
+            scores = cross_val_score(make_classifier(), X_sketch, y_full, cv=5)
             seed_accuracy_scores.append([float(s) for s in scores])
 
-        acc_mean, acc_sem = bucket_utils.mean_and_sem(seed_accuracy_scores)
-
         results["n_features"].append(n_features)
-        results["space_streaming"].append(np.mean(seed_space_streaming))
-        results["space_sparse"].append(np.mean(seed_space_sparse))
-        results["space_quantum"].append(np.mean(seed_space_quantum))
-        results["space_streaming_by_seed"].append(seed_space_streaming)
-        results["space_sparse_by_seed"].append(seed_space_sparse)
-        results["space_quantum_by_seed"].append(seed_space_quantum)
-        results["accuracies_mean"].append(acc_mean)
-        results["accuracies_std"].append(acc_sem)
-        results["accuracy_scores_by_seed"].append(seed_accuracy_scores)
+        results["space_streaming"].append(seed_space_streaming)
+        results["space_sparse"].append(seed_space_sparse)
+        results["space_quantum"].append(seed_space_quantum)
+        results["accuracy_scores"].append(seed_accuracy_scores)
 
     return results
 
 
-def plot_parametric_hybrid(
-    x_mean,
-    x_std,
-    y_mean,
-    color,
-    marker,
-    label,
-    linewidth,
-    marker_size,
-):
-    # 1. Horizontal Tube (Accuracy SEM/STD)
-    y_vals = np.array(y_mean)
-    x_vals = np.array(x_mean)
-    x_errs = np.array(x_std) if x_std is not None else np.zeros_like(x_vals)
+def run_analysis(load_file=None, mode=None, n_sketch_seeds=n_sketch_seeds):
+    sketch_mode = sweep_utils.is_sketch_mode(mode)
 
-    plt.fill_betweenx(
-        y_vals,
-        x_vals - x_errs,
-        x_vals + x_errs,
-        color=color,
-        alpha=0.2,
-        edgecolor="none",
-    )
-
-    # 2. Line
-    plt.plot(x_vals, y_vals, linestyle="-", color=color, linewidth=1.5, alpha=0.9)
-
-    plt.scatter(
-        x_vals,
-        y_vals,
-        marker=marker,
-        color=color,
-        label=label,
-        alpha=0.9,
-        s=marker_size,
-        linewidth=linewidth,
-    )
-
-
-def get_sorted_arrays(x_mean, x_std, y_mean):
-    data = sorted(zip(x_mean, x_std, y_mean), key=lambda x: x[2])
-    return (
-        np.array([d[0] for d in data]),
-        np.array([d[1] for d in data]),
-        np.array([d[2] for d in data]),
-    )
-
-
-def run_analysis(load_file=None, mode=None, n_bucket_seeds=n_bucket_seeds):
-    if mode not in ("rare", "bucket", "jl"):
-        raise ValueError("mode must be 'rare', 'bucket', or 'jl'")
-
-    keys = ["streaming", "sparse", "quantum"]
-
-    if load_file:
-        print(f"Loading analysis from {load_file}...")
-        with open(load_file, "r") as f:
-            data_to_save = json.load(f)
-        bucket_utils.validate_truncation_data(data_to_save, mode, load_file)
-        raw_key = (
-            "raw_data_by_n_features"
-            if mode in ("bucket", "jl")
-            else "raw_data_by_min_df"
-        )
-        raw_data = data_to_save[raw_key]
-        params = sorted([int(k) for k in raw_data.keys()])
-
-        final_stats = {
-            k: {"mean_space": [], "mean_acc": [], "sem_acc": []} for k in keys
-        }
-        for param in params:
-            entry = raw_data[str(param)]
-            for k in keys:
-                method_entry = entry[k]
-
-                final_stats[k]["mean_space"].append(method_entry["space"])
-                if "accuracy_scores_by_seed" in method_entry:
-                    acc_mean, acc_sem = bucket_utils.mean_and_sem(
-                        method_entry["accuracy_scores_by_seed"]
-                    )
-                elif "accuracy_scores" in method_entry:
-                    acc_mean, acc_sem = bucket_utils.mean_and_sem(
-                        method_entry["accuracy_scores"]
-                    )
-                else:
-                    if "accuracy_mean" in method_entry:
-                        acc_mean = method_entry["accuracy_mean"]
-                        acc_sem = method_entry["accuracy_sem"]
-                    else:
-                        acc_mean = method_entry["accuracy"]
-                        acc_sem = method_entry["accuracy_std"]
-                final_stats[k]["mean_acc"].append(acc_mean)
-                final_stats[k]["sem_acc"].append(acc_sem)
-
-    else:
-        if mode in ("bucket", "jl"):
-            if mode == "bucket":
-                print("Running SVM Analysis on bucketed Dorothea Dataset...")
-                feature_seeds = bucket_utils.sample_bucket_seeds(n_bucket_seeds)
-                output_json = "dorothea_bucket_size_vs_accuracy.json"
-                dataset_name = "Dorothea (bucket)"
-            else:
-                print("Running SVM Analysis on Sparse-JL-projected Dorothea Dataset...")
-                feature_seeds = bucket_utils.sample_jl_seeds(n_bucket_seeds)
-                output_json = "dorothea_jl_size_vs_accuracy.json"
-                dataset_name = "Dorothea (sparse JL)"
-            print(f"Averaging over random feature seeds: {feature_seeds}")
-            results = get_svm_results_bucket(
-                bucket_seeds=feature_seeds, truncation_mode=mode
+    if load_file is None:
+        if sketch_mode:
+            sketch = sketch_utils.get_sketch(mode)
+            print(f"Running SVM Analysis on {sketch.name}-sketched Dorothea Dataset...")
+            seeds = sketch_utils.sample_sketch_seeds(n_sketch_seeds)
+            print(f"Averaging over random sketch seeds: {seeds}")
+            results = get_svm_results_sketch(seeds, mode)
+            load_file = sweep_utils.save_sweep_json(
+                results,
+                metric="accuracy",
+                dataset_name=f"Dorothea ({sketch.name})",
+                output_json=f"dorothea_{mode}_size_vs_accuracy.json",
+                sketch_mode=True,
+                param_name="n_features",
+                raw_key="raw_data_by_n_features",
+                mode=mode,
+                seeds=seeds,
             )
-            param_name = "n_features"
-            raw_key = "raw_data_by_n_features"
         else:
             print("Running SVM Analysis on Dorothea Dataset...")
             results = get_svm_results_full()
-            param_name = "min_dfs"
-            raw_key = "raw_data_by_min_df"
-            output_json = "dorothea_size_vs_accuracy.json"
-            dataset_name = "Dorothea"
-
-        data_to_save = {"dataset": dataset_name, raw_key: {}}
-        if mode == "bucket":
-            data_to_save["truncation_mode"] = "bucket"
-            data_to_save["bucket_seeds"] = feature_seeds
-            data_to_save["bucket_n_features"] = results["n_features"]
-            data_to_save["bucket_seed_sample_seed"] = (
-                bucket_utils.DEFAULT_BUCKET_SEED_SAMPLE_SEED
+            load_file = sweep_utils.save_sweep_json(
+                results,
+                metric="accuracy",
+                dataset_name="Dorothea",
+                output_json="dorothea_size_vs_accuracy.json",
+                sketch_mode=False,
+                param_name="min_dfs",
+                raw_key="raw_data_by_min_df",
+                rare_scores_key="accuracy_scores",
             )
-        elif mode == "jl":
-            data_to_save["truncation_mode"] = "jl"
-            data_to_save["jl_seeds"] = feature_seeds
-            data_to_save["jl_n_features"] = results["n_features"]
-            data_to_save["jl_seed_sample_seed"] = (
-                bucket_utils.DEFAULT_JL_SEED_SAMPLE_SEED
-            )
-            data_to_save["jl_transform"] = bucket_utils.SPARSE_JL_TRANSFORM
+    else:
+        print(f"Loading analysis from {load_file}...")
 
-        final_stats = {
-            k: {"mean_space": [], "mean_acc": [], "sem_acc": []} for k in keys
-        }
+    with open(load_file, "r") as f:
+        data = json.load(f)
+    sketch_utils.validate_truncation_data(data, mode, load_file)
+    stats = sweep_utils.load_sweep_stats(data, "accuracy")
+    plot_results(stats, mode, sketch_mode)
 
-        for i, param in enumerate(results[param_name]):
-            param_str = str(param)
-            data_to_save[raw_key][param_str] = {}
 
-            for k in keys:
-                space = results[f"space_{k}"][i]
-                acc = results["accuracies_mean"][i]
-                sem = results["accuracies_std"][i]
-
-                final_stats[k]["mean_space"].append(space)
-                final_stats[k]["mean_acc"].append(acc)
-                final_stats[k]["sem_acc"].append(sem)
-
-                data_to_save[raw_key][param_str][k] = {
-                    "space": space,
-                    "accuracy_mean": acc,
-                    "accuracy_sem": sem,
-                }
-                if mode in ("bucket", "jl"):
-                    data_to_save[raw_key][param_str][k]["space_by_seed"] = results[
-                        f"space_{k}_by_seed"
-                    ][i]
-                    data_to_save[raw_key][param_str][k][
-                        "accuracy_scores_by_seed"
-                    ] = results["accuracy_scores_by_seed"][i]
-                else:
-                    data_to_save[raw_key][param_str][k]["accuracy_scores"] = results[
-                        "accuracy_scores"
-                    ][i]
-
-        with open(output_json, "w") as f:
-            json.dump(data_to_save, f, indent=2)
-        print(f"Saved raw data to {output_json}")
-
-    # Plot
-    plt.figure(figsize=figsize)
-    for k in keys:
-        xm, xs, ym = get_sorted_arrays(
-            final_stats[k]["mean_acc"],
-            final_stats[k]["sem_acc"],
-            final_stats[k]["mean_space"],
+def plot_results(stats, mode, sketch_mode):
+    plt.figure(figsize=sweep_utils.FIGSIZE)
+    ax = plt.gca()
+    for k in sweep_utils.METHOD_KEYS:
+        xm, xs, ym = sweep_utils.sort_by_space(
+            stats[k]["metric_mean"], stats[k]["metric_sem"], stats[k]["space_mean"]
         )
         ind = xm >= 0.6
-        plot_parametric_hybrid(
+        sweep_utils.plot_curve(
+            ax,
+            k,
             xm[ind],
             xs[ind],
             ym[ind],
-            colors[k],
-            markers[k],
-            (streaming_label_for_mode(mode) if k == "streaming" else labels[k]),
-            linewidth_marker[k],
-            markersize[k],
+            label=(sketch_utils.streaming_label(mode) if k == "streaming" else None),
+            show_all_markers=True,
         )
 
     halo = [pe.withStroke(linewidth=3, foreground="white")]
-    ax = plt.gca()
-    if mode in ("bucket", "jl"):
+    if sketch_mode:
         streaming_label_x, streaming_label_y, streaming_label_ha = (
             (0.6, 0.35, "right") if mode == "jl" else (0.85, 0.5, "right")
         )
@@ -443,7 +221,7 @@ def run_analysis(load_file=None, mode=None, n_bucket_seeds=n_bucket_seeds):
             0.05,
             0.92,
             "Classical sparse / QRAM",
-            color=colors["sparse"],
+            color=sweep_utils.COLORS["sparse"],
             fontsize=10,
             path_effects=halo,
             transform=ax.transAxes,
@@ -451,8 +229,8 @@ def run_analysis(load_file=None, mode=None, n_bucket_seeds=n_bucket_seeds):
         plt.text(
             streaming_label_x,
             streaming_label_y,
-            streaming_label_for_mode(mode),
-            color=colors["streaming"],
+            sketch_utils.streaming_label(mode),
+            color=sweep_utils.COLORS["streaming"],
             fontsize=10,
             path_effects=halo,
             transform=ax.transAxes,
@@ -462,7 +240,7 @@ def run_analysis(load_file=None, mode=None, n_bucket_seeds=n_bucket_seeds):
             0.15,
             0.035,
             "Quantum oracle sketching",
-            color=colors["quantum"],
+            color=sweep_utils.COLORS["quantum"],
             fontsize=10,
             path_effects=halo,
             transform=ax.transAxes,
@@ -472,7 +250,7 @@ def run_analysis(load_file=None, mode=None, n_bucket_seeds=n_bucket_seeds):
             0.9,
             6e5,
             "Classical sparse / QRAM",
-            color=colors["sparse"],
+            color=sweep_utils.COLORS["sparse"],
             fontsize=10,
             path_effects=halo,
             ha="right",
@@ -480,8 +258,8 @@ def run_analysis(load_file=None, mode=None, n_bucket_seeds=n_bucket_seeds):
         plt.text(
             0.9,
             4e3,
-            streaming_label_for_mode(mode),
-            color=colors["streaming"],
+            sketch_utils.streaming_label(mode),
+            color=sweep_utils.COLORS["streaming"],
             fontsize=10,
             path_effects=halo,
             ha="right",
@@ -490,7 +268,7 @@ def run_analysis(load_file=None, mode=None, n_bucket_seeds=n_bucket_seeds):
             0.95,
             1.4e1,
             "Quantum oracle sketching",
-            color=colors["quantum"],
+            color=sweep_utils.COLORS["quantum"],
             fontsize=10,
             path_effects=halo,
             ha="right",
@@ -500,7 +278,7 @@ def run_analysis(load_file=None, mode=None, n_bucket_seeds=n_bucket_seeds):
     plt.xlabel("Accuracy")
     plt.ylabel("Machine size")
     plt.ylim(1e1, 2e6)
-    if mode in ("bucket", "jl"):
+    if sketch_mode:
         plt.xlim(0.79, 0.95)
         plt.xticks([0.80, 0.84, 0.88, 0.92], ["80%", "84%", "88%", "92%"])
     else:
@@ -509,10 +287,8 @@ def run_analysis(load_file=None, mode=None, n_bucket_seeds=n_bucket_seeds):
     plt.grid(True, which="major", ls="-", alpha=0.1)
     plt.title("Binary classification")
     plt.tight_layout()
-    if mode == "bucket":
-        output_pdf = "dorothea_bucket_size_vs_accuracy.pdf"
-    elif mode == "jl":
-        output_pdf = "dorothea_jl_size_vs_accuracy.pdf"
+    if sketch_mode:
+        output_pdf = f"dorothea_{mode}_size_vs_accuracy.pdf"
     else:
         output_pdf = "dorothea_size_vs_accuracy.pdf"
     plt.savefig(output_pdf)
@@ -520,29 +296,4 @@ def run_analysis(load_file=None, mode=None, n_bucket_seeds=n_bucket_seeds):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Dorothea Machine Size vs Accuracy Analysis"
-    )
-    parser.add_argument(
-        "--load", type=str, default=None, help="Load analysis data from JSON file"
-    )
-    parser.add_argument(
-        "--mode",
-        choices=["rare", "bucket", "jl"],
-        required=True,
-        help=(
-            "rare: original rare-feature truncation; "
-            "bucket: random feature buckets; "
-            "jl: balanced signed sparse JL projection"
-        ),
-    )
-    parser.add_argument("--n-bucket-seeds", type=int, default=n_bucket_seeds)
-    parser.add_argument("--n-jl-seeds", type=int, default=n_jl_seeds)
-    args = parser.parse_args()
-    if args.mode == "jl":
-        n_random_seeds = args.n_jl_seeds
-    else:
-        n_random_seeds = args.n_bucket_seeds
-    run_analysis(
-        load_file=args.load, mode=args.mode, n_bucket_seeds=n_random_seeds
-    )
+    sweep_utils.sweep_main("Dorothea Machine Size vs Accuracy Analysis", run_analysis)

@@ -90,6 +90,8 @@ This generates:
 ├── notebooks/
 │   └── 01_qos_quickstart.ipynb # Beginner tutorial notebook
 ├── real_datasets/            # Real-data experiments + plotting scripts
+│   ├── sketch_utils.py       # Shared oblivious-sketch interface (registry, seeds, validation)
+│   ├── sweep_utils.py        # Shared sweep pipeline: machine-size accounting, JSON I/O, stats, plotting
 │   ├── *_svm.py              # LS-SVM-style classification accuracy vs machine size
 │   ├── *_pca.py              # PCA variance recovery vs machine size
 │   ├── *_combine_fig.py      # Combined 2-panel plots for each dataset
@@ -104,14 +106,32 @@ This generates:
 - 20 Newsgroups topic data (text TF-IDF)
 - PBMC68k single-cell RNA (UMI)
 - Dorothea drug-discovery dataset
-- Splice dataset (k-mer)
 
 The mode-enabled real-dataset scripts use:
 - `--mode rare`: rare-feature truncation (via `min_df` or `min_samples`).
 - `--mode bucket`: balanced feature hashing / feature buckets.
 - `--mode jl`: balanced signed sparse JL projection, implemented as the bucket transform with an additional random sign per original feature.
 
-For `bucket` and `jl`, the requested sketch dimension is capped at the original feature dimension; this full-dimension endpoint returns the original data exactly. Bucket/JL random seeds are sampled reproducibly from a fixed sample seed in `bucket_utils.py` (default sample seed `42`), with 5 seeds by default (`--n-bucket-seeds` or `--n-jl-seeds`).
+The classical oblivious sketches share one interface: each is a
+`(sketch, lift)` function pair registered in `OBLIVIOUS_SKETCHES` in
+`sketch_utils.py`, together with its plot label and the transform identifier
+recorded in the output JSONs. The dataset scripts are sketch-agnostic — adding
+a new oblivious sketch means implementing the pair and adding one registry
+entry, after which every `*_svm.py`/`*_pca.py` script accepts the new mode key
+through `--mode`; see the `sketch_utils.py` module docstring for the exact
+contract.
+
+For every sketch mode, the requested sketch dimension is capped at the
+original feature dimension; this full-dimension endpoint returns the original
+data exactly. Sketch random seeds are sampled reproducibly from a fixed sample
+seed in `sketch_utils.py` (default sample seed `42`), with 5 seeds by default
+(`--n-seeds`).
+
+The quantum machine-size accounting from the Supplementary Information is
+implemented once in `sweep_utils.qos_machine_size` and used by every sweep;
+the rest of the sweep pipeline (canonical JSON persistence, statistics, and
+the plotting primitives) is likewise shared in `sweep_utils.py`, so every
+figure is a pure function of its JSON.
 
 ### Run full pipelines from scratch
 
@@ -145,13 +165,6 @@ python dorothea_pca.py --mode rare
 python dorothea_combine_fig.py --mode rare
 ```
 
-Splice:
-```bash
-python splice_svm.py
-python splice_pca.py
-python splice_combine_fig.py
-```
-
 ### Bucket feature hashing and sparse JL numerics
 
 Run from `real_datasets/`. A minimal single-dataset IMDb run for both SVM and PCA is:
@@ -175,7 +188,6 @@ python imdb_combine_fig.py --mode bucket_jl
 - 20 Newsgroups: fetched through `sklearn.datasets.fetch_20newsgroups`.
 - PBMC68k: loaded via `scvelo.datasets.pbmc68k` (downloaded/cached automatically).
 - Dorothea: download manually from UCI (https://archive.ics.uci.edu/static/public/169/dorothea.zip) and extract to `data_cache/dorothea` (relative to where you run scripts).
-- Splice: fetched via `ucimlrepo` (dataset id 69).
 
 ## Core Files and Roles
 
