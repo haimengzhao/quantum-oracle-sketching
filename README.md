@@ -111,6 +111,8 @@ The mode-enabled real-dataset scripts use:
 - `--mode rare`: rare-feature truncation (via `min_df` or `min_samples`).
 - `--mode bucket`: balanced feature hashing / feature buckets.
 - `--mode jl`: balanced signed sparse JL projection, implemented as the bucket transform with an additional random sign per original feature.
+- `--mode jl2` / `jl4` / `jl8`: the balanced signed sparse JL family at sparsity 2, 4, and 8 — each feature enters `s` distinct balanced buckets with weight ±1/sqrt(bucket occupancy), reducing exactly to `jl` at sparsity 1.
+- `--mode subsamp`: uniform feature subsampling without replacement (a column-orthonormal selection matrix).
 
 The classical oblivious sketches share one interface: each is a
 `(sketch, lift)` function pair registered in `OBLIVIOUS_SKETCHES` in
@@ -181,6 +183,32 @@ After generating both bucket and JL JSON files for the same dataset, the combine
 ```bash
 python imdb_combine_fig.py --mode bucket_jl
 ```
+
+### Oblivious sketching survey
+
+`survey_sketches.py` compares the terminal performance of the oblivious
+sketches at equal streaming machine size (the sketch dimension) on IMDb and
+PBMC68k: uniform subsampling, feature hashing, and the balanced signed
+sparse JL family at sparsity 1, 2, 4, and 8. Every method reuses the
+preprocessing, models, grids, and seeds of the corresponding main-figure
+sweep. Compute each panel's data and assemble the 2x4 figure with:
+
+```bash
+python survey_sketches.py --dataset imdb --task svm
+python survey_sketches.py --dataset imdb --task pca
+python survey_sketches.py --dataset pbmc68k --task svm
+python survey_sketches.py --dataset pbmc68k --task pca
+python survey_sketches.py --plot
+```
+
+The top row shows machine size vs terminal performance on the main-figure
+axes; the bottom row shows the per-seed paired performance difference to the
+feature hashing baseline (identically zero for the baseline itself).
+
+Compute jobs checkpoint after every sketch dimension and resume from
+`survey_*.partial.json` if interrupted; the PBMC68k classification job
+parallelizes its independent per-pair cross-validations over `--n-jobs`
+workers (default: all cores) without affecting the results.
 
 ### Dataset source/setup notes
 
