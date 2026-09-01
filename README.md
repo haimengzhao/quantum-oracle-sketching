@@ -202,13 +202,63 @@ python survey_sketches.py --plot
 ```
 
 The top row shows machine size vs terminal performance on the main-figure
-axes; the bottom row shows the per-seed paired performance difference to the
-feature hashing baseline (identically zero for the baseline itself).
+axes, together with the full-matrix quantum oracle sketching point (the
+quantum endpoint of the corresponding main-figure sweep, read from its
+JSON); the bottom row shows the per-seed paired performance difference to
+the feature hashing baseline (identically zero for the baseline itself).
 
 Compute jobs checkpoint after every sketch dimension and resume from
 `survey_*.partial.json` if interrupted; the PBMC68k classification job
 parallelizes its independent per-pair cross-validations over `--n-jobs`
 workers (default: all cores) without affecting the results.
+
+### Adaptive sketching survey
+
+`survey_adaptive.py` compares feature hashing — both the exact ridge
+terminal accuracy (dashed) and the same hashed model trained by the shared
+streaming SGD protocol (solid) — against two adaptive sketching methods
+trained by streaming ridge SGD — AWM-Sketch (SIGMOD 2018) and MISSION
+(ICML 2018) — on IMDb and PBMC68k classification, under a total
+scalar-register budget that counts all adaptive state (sketch counters and
+heap/active-set ids and values). The stream
+draws single rows uniformly at random from an 80/20 train split and runs
+until the training ridge loss stops decreasing over a window of N samples;
+the reported value is the held-out accuracy at minimal training loss, so
+neither stopping nor model selection touches the test split. The shared
+learning-rate schedule eta0/sqrt(t) is selected per dataset with
+`--tune-eta` (full-dimensional SGD on the untruncated data, also by
+minimal training loss). Compute and plot with:
+
+```bash
+python survey_adaptive.py --tune-eta   # once; records survey_adaptive_eta0.json
+python survey_adaptive.py --dataset imdb
+python survey_adaptive.py --dataset pbmc68k
+python survey_adaptive.py --plot
+python survey_adaptive.py --plot-convergence
+```
+
+The 1x4 figure shows machine size vs accuracy (main-figure axes, including
+the full-matrix quantum oracle sketching reference point, inserted into
+existing survey JSONs by `--add-qos-ref`) and the per-seed paired difference
+to the feature hashing baseline, paired at equal measured machine size by
+interpolating the baseline's accuracy-size curve.
+
+`--plot-convergence` assembles a second 1x4 figure
+(`survey_adaptive_convergence.pdf`): the feature hashing SGD training
+dynamics at a middle and a large truncated feature dimension D' per dataset
+(IMDb D'=8192/65536, PBMC68k D'=4096/32768) — the training ridge
+loss (log-scale left axis) and the test accuracy (right axis), each as a
+ratio to the matched exact same-budget solution so the exact reference is a
+dashed line at 1 on both axes, vs samples / training set size, one
+semi-transparent curve per task x seed run; the axes are scaled per panel.
+Some PBMC68k pairs at large D' transiently explode
+by orders of magnitude before the 1/sqrt(t) schedule recovers them, so each
+panel's limits follow its never-exploding runs; exploding curves leave the
+frame and re-enter where they recover. The IMDb panels read the survey
+JSON; the PBMC68k panels show the single pair of the two largest cell-type
+classes (CD8+ Cytotoxic T vs CD8+/CD45RA+ Naive Cytotoxic), which the
+survey's 20 random pairs do not include — `--pbmc-top-pair` computes it
+under the survey's exact protocol into `survey_adaptive_pbmc68k_top2.json`.
 
 ### Dataset source/setup notes
 
