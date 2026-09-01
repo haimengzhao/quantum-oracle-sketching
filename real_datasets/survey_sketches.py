@@ -17,8 +17,10 @@ JSONs with
     python survey_sketches.py --plot
 
 The top row shows machine size vs terminal performance on the main-figure
-axes; the bottom row shows the per-seed paired performance difference to the
-feature hashing baseline, which is therefore identically zero.
+axes, together with the full-matrix quantum oracle sketching point (the
+quantum endpoint of the corresponding main-figure sweep, read from its
+JSON); the bottom row shows the per-seed paired performance difference to
+the feature hashing baseline, which is therefore identically zero.
 
 Compute jobs checkpoint after every sketch dimension into
 survey_{dataset}_{task}.partial.json (removed once the final JSON is
@@ -437,6 +439,50 @@ TOP_AXES = {
 BOTTOM_XLABEL = "Diff. from feature hashing"
 YLIM = (1e1, 1e7)
 
+QOS_STYLE = dict(
+    color=sweep_utils.COLORS["quantum"],
+    marker="D",
+    marker_size=45,
+    label="Quantum oracle sketching",
+)
+# The full-matrix QOS reference is the quantum curve's full-dimension
+# endpoint of the corresponding main-figure sweep, read verbatim from its
+# JSON: (performance mean, performance sem, machine size) at exact recovery.
+QOS_MAIN_JSON = {
+    ("imdb", "svm"): (
+        "imdb_bucket_size_vs_accuracy.json", "accuracy_mean", "accuracy_sem"
+    ),
+    ("imdb", "pca"): (
+        "imdb_bucket_size_vs_variance.json",
+        "variance_recovery",
+        "variance_recovery_sem",
+    ),
+    ("pbmc68k", "svm"): (
+        "pbmc68k_bucket_size_vs_accuracy.json", "accuracy_mean", "accuracy_sem"
+    ),
+    ("pbmc68k", "pca"): (
+        "pbmc68k_bucket_size_vs_variance.json",
+        "variance_recovery",
+        "variance_recovery_sem",
+    ),
+}
+
+
+def qos_endpoint(json_dir, dataset, task):
+    """(mean, sem, machine size) of the published full-matrix QOS point."""
+    fname, mean_key, sem_key = QOS_MAIN_JSON[(dataset, task)]
+    path = os.path.join(json_dir, fname)
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"{path} is required for the full-matrix QOS reference point; "
+            "run the corresponding main-figure sweep first"
+        )
+    with open(path, "r") as f:
+        main = json.load(f)
+    raw = main["raw_data_by_n_features"]
+    endpoint = raw[max(raw, key=int)]["quantum"]
+    return endpoint[mean_key], endpoint[sem_key], endpoint["space"]
+
 
 def method_scores(record, method):
     """The sole raw score array stored for a method at one sketch dimension."""
@@ -557,6 +603,26 @@ def plot_survey(json_dir, output_pdf):
                 ax_bottom, m, stats[m]["dmean"], stats[m]["dsem"], stats[m]["space"]
             )
 
+        qos_mean, qos_sem, qos_space = qos_endpoint(json_dir, dataset, task)
+        if qos_sem > 0:
+            ax_top.plot(
+                [qos_mean - qos_sem, qos_mean + qos_sem],
+                [qos_space, qos_space],
+                color=QOS_STYLE["color"],
+                linewidth=1.2,
+                alpha=0.5,
+            )
+        ax_top.scatter(
+            [qos_mean],
+            [qos_space],
+            marker=QOS_STYLE["marker"],
+            color=QOS_STYLE["color"],
+            alpha=0.9,
+            s=QOS_STYLE["marker_size"],
+            linewidth=0,
+            zorder=5,
+        )
+
         top_cfg = TOP_AXES[(dataset, task)]
         ax_top.set_xlim(*top_cfg["xlim"])
         ax_top.set_xticks(top_cfg["xticks"])
@@ -591,10 +657,23 @@ def plot_survey(json_dir, output_pdf):
                 ax.tick_params(axis="y", labelleft=False)
 
     handles = [_legend_handle(m) for m in SURVEY_METHODS]
+    handles.append(
+        mlines.Line2D(
+            [],
+            [],
+            color=QOS_STYLE["color"],
+            linestyle="none",
+            marker=QOS_STYLE["marker"],
+            markersize=7,
+            markerfacecolor=QOS_STYLE["color"],
+            markeredgewidth=0,
+            label=QOS_STYLE["label"],
+        )
+    )
     fig.legend(
         handles=handles,
         loc="lower center",
-        ncol=len(SURVEY_METHODS),
+        ncol=len(handles),
         frameon=True,
     )
     fig.tight_layout(rect=(0, 0.07, 1, 1))
