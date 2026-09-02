@@ -12,18 +12,27 @@ trained by streaming ridge SGD under a total scalar-register budget:
   ICML 2018 (arXiv:1806.04310), Algorithm 1.
 
 Protocol (fixed by design review):
-- Per seed, an 80/20 stratified split; the stream draws single rows
-  uniformly WITH replacement from the train split; accuracy is measured on
-  the held-out 20%.
+- Per seed, an 80/20 stratified split; the stream draws single rows WITH
+  replacement from the train split — uniformly (IMDb), or class-balanced
+  (PBMC68k: a class uniformly, then a row uniformly within it), which
+  realizes the balanced class weights by importance sampling with unit
+  gradient weights and identical expected objective; accuracy is measured
+  on the held-out 20%.
 - Ridge loss on +-1 labels: l = 0.5*(w.x + b - y)^2 + (lambda/2)|w|^2 with
   lambda = alpha/N_train and the main figures' alpha (IMDb 10, PBMC68k 200);
   PBMC68k uses balanced class weights, matching class_weight="balanced".
   The bias b is unregularized and excluded from every budget uniformly.
 - One fixed learning-rate schedule for all methods, eta_t = ETA0/sqrt(t),
-  with ETA0 selected PER DATASET by --tune-eta: full-dimensional SGD ridge
-  on the untruncated data (IMDb: the single task; PBMC68k: the first
-  cell-type pair), first sampled seed, candidates ETA0_CANDIDATES, chosen
-  by minimal training loss.
+  applied to features rescaled per run by s = sqrt(STEP_REF_SCALE / mean
+  squared streamed-row norm) with lambda rescaled by s^2 (an exact
+  reparametrization of the same objective), so the per-sample weight step
+  eta_t*|x|^2 matches the regime ETA0 was tuned in whatever the feature
+  scale (raw rows vs occupancy-normalized hashed buckets) while the bias
+  step is unchanged. ETA0 and STEP_REF_SCALE are selected/recorded PER
+  DATASET by --tune-eta: full-dimensional SGD ridge on the untruncated data
+  (IMDb: the single task; PBMC68k: the first cell-type pair), first
+  sampled seed, candidates ETA0_CANDIDATES, chosen by minimal training
+  loss.
 - Stopping and selection: every N/5 samples (N = train rows) the TRAINING
   ridge objective of the decoded model is evaluated; the stream stops once
   the lowest training loss so far has not decreased by a relative 1e-4
@@ -77,15 +86,27 @@ METHODS = ("hashing", "hashing_sgd", "awm", "mission")
 BASELINE_METHOD = "hashing"
 n_sketch_seeds = 5
 
-# Selected per dataset by --tune-eta on 2026-08-31: full-dimensional SGD
-# ridge on the untruncated data (IMDb: the single task; PBMC68k: the first
+# Selected per dataset by --tune-eta on 2026-08-31 (final protocol: class-
+# balanced sampling, step-scale normalization): full-dimensional SGD ridge
+# on the untruncated data (IMDb: the single task; PBMC68k: the first
 # cell-type pair), first sampled seed, chosen by minimal training loss.
-# IMDb min losses 0.4994 / 0.4708 / 0.2960 / 0.2488 and PBMC68k 0.0853 /
-# 0.0763 / 0.0739 / diverged for candidates 0.001 / 0.01 / 0.1 / 1.0; the
+# IMDb min losses 0.4994 / 0.4708 / 0.2960 / 0.2488 and PBMC68k 0.0857 /
+# 0.0768 / 0.0741 / diverged for candidates 0.001 / 0.01 / 0.1 / 1.0; the
 # record is kept in survey_adaptive_eta0.json. One value per dataset,
 # shared by all methods.
 ETA0 = {"imdb": 1.0, "pbmc68k": 0.1}
 ETA0_CANDIDATES = [0.001, 0.01, 0.1, 1.0]
+
+# Feature scale of each dataset's eta0-tuning problem: the mean squared row
+# norm of the full-dimensional training split used by --tune-eta (recorded
+# there). The per-sample SGD weight step is eta_t*|x|^2, so every run
+# rescales its streamed features by s = sqrt(STEP_REF_SCALE / own mean
+# squared row norm) and lambda by s^2 — an exact reparametrization of the
+# same ridge objective — so the tuned eta0 acts at the same effective step
+# whether the features are raw rows or occupancy-normalized hashed buckets
+# (which shrink |x|^2 by up to ~1000x at small budgets), while the bias
+# step is untouched.
+STEP_REF_SCALE = {"imdb": 1.0, "pbmc68k": 79.6708984375}
 
 # Marks the stopping/selection convention in every JSON fingerprint, so
 # results recorded under a different convention (e.g. best-so-far or
@@ -110,6 +131,13 @@ IMPROVEMENT_TOL = 1e-4
 SAMPLE_CAP_FACTOR = 300  # hard cap: SAMPLE_CAP_FACTOR * N samples
 
 RNG_BLOCK = 1 << 14  # stream indices drawn in blocks (bit-exact vs singles)
+
+# Fold the lazy L2 scale into the stored weights below this value. Stored
+# weights are w/scale, and under the step-scale reparametrization the
+# cumulative decay prod 1/(1+lambda*s^2*eta_t) can fall below float64 range
+# on long streams (lambda*s^2*eta0 reaches ~3 on the smallest PBMC68k pair);
+# re-basing is exact up to rounding and keeps every register O(w * 1e6).
+SCALE_FLOOR = 1e-6
 
 
 # --- data -------------------------------------------------------------------
@@ -151,10 +179,16 @@ def load_pbmc68k_pairs():
 # Shared conventions: labels are +-1 and the margin loss is
 # l = 0.5*(tau - y)^2 so the gradient factor is g = c*(tau - y), where c is
 # the (balanced) class weight; this is y*dl(y*tau) in the papers' notation
-# and the standard SGD formula for ridge regression. The L2 decay
-# (1 - lambda*eta) is applied through one global scale factor (WM-Sketch
-# paper Sec. 5.1 "Efficient Regularization"; bit-equivalent to shrinking
-# every stored weight each step). Hash/sign functions are materialized as
+# and the standard SGD formula for ridge regression. The L2 decay is
+# applied through one global scale factor (WM-Sketch paper Sec. 5.1
+# "Efficient Regularization"; bit-equivalent to shrinking every stored
+# weight each step), in its PROXIMAL (implicit-Euler) form 1/(1+lambda*eta):
+# it agrees with the papers' explicit (1-lambda*eta) to first order in the
+# tuned regime (lambda*eta ~ 1e-4..1e-2) but stays a contraction for any
+# lambda*eta, which the explicit form does not once the step-scale
+# reparametrization (lambda*s^2, s^2 up to ~200) meets small training sets
+# (lambda*s^2*eta0 up to ~3, where 1-lambda*eta flips sign or crosses zero
+# and dividing by the scale explodes). Hash/sign functions are materialized as
 # arrays purely as a simulation device; the algorithm requires only O(1)
 # seeds, the same convention used for the oblivious sketches.
 
@@ -171,9 +205,12 @@ class DenseRidgeSGD:
     def update(self, fi, fv, y, c, eta, lam):
         tau = self.scale * float(self.w[fi] @ fv) + self.bias
         g = c * (tau - y)
-        self.scale *= 1.0 - lam * eta
+        self.scale /= 1.0 + lam * eta
         self.w[fi] -= eta * g * fv / self.scale
         self.bias -= eta * g
+        if self.scale < SCALE_FLOOR:
+            self.w *= self.scale
+            self.scale = 1.0
 
     def decode(self, fi):
         return self.scale * self.w[fi]
@@ -231,7 +268,7 @@ class AWMSketch:
         g = c * (tau - y)
 
         # Uniform L2 decay of active set and sketch via the global scale.
-        self.scale *= 1.0 - lam * eta
+        self.scale /= 1.0 + lam * eta
         step = eta * g / self.scale
         if in_active.any():
             self.vals[slots] -= step * fv[in_active]
@@ -275,6 +312,13 @@ class AWMSketch:
                     else:
                         self.z[self.h[f]] -= self.sgn[f] * step * v
         self.bias -= eta * g
+        if self.scale < SCALE_FLOOR:
+            self._fold_scale()
+
+    def _fold_scale(self):
+        self.z *= self.scale
+        self.vals *= self.scale
+        self.scale = 1.0
 
     def _insert(self, f, w):
         i = self.fill
@@ -361,6 +405,11 @@ class TopKSketchModel:
                     self.vals[imin] = e
                     self.slot[f] = imin
 
+    def _fold_scale(self):
+        self.z *= self.scale
+        self.vals *= self.scale
+        self.scale = 1.0
+
     def decode(self, fi):
         w = np.zeros(len(fi))
         for pos, f in enumerate(fi.tolist()):
@@ -384,10 +433,12 @@ class Mission(TopKSketchModel):
     def update(self, fi, fv, y, c, eta, lam):
         tau, _ = self._topk_margin(fi, fv)
         g = c * (tau - y)
-        self.scale *= 1.0 - lam * eta
+        self.scale /= 1.0 + lam * eta
         self._sketch_add(fi, -eta * g * fv / self.scale)
         self._refresh_topk(fi)
         self.bias -= eta * g
+        if self.scale < SCALE_FLOOR:
+            self._fold_scale()
 
 
 ADAPTIVE_MODELS = {"awm": AWMSketch, "mission": Mission}
@@ -425,8 +476,27 @@ def ridge_objective(scores, y_train, sample_weights, lam, w_sq):
     )
 
 
-def stream_until_terminal(model, X_train, y_train, X_test, y_test, seed, lam, balanced, eta0):
+def stream_until_terminal(
+    model, X_train, y_train, X_test, y_test, seed, lam, balanced, eta0,
+    step_ref_scale=None,
+):
     """Run the shared streaming protocol.
+
+    Sampling: with `balanced`, balanced class weights c_k = N/(2 N_k) are
+    realized by CLASS-BALANCED SAMPLING (draw a class uniformly, then a row
+    uniformly within it) with unit gradient weights — the importance-
+    sampling equivalent of weighting the gradient, with the identical
+    expected objective but per-sample steps no longer amplified by c_k
+    (which reaches ~40 on the most imbalanced PBMC68k pairs and made SGD
+    diverge). Otherwise rows are drawn uniformly. The training-loss
+    evaluation keeps the explicit weights, so the objective is unchanged.
+
+    Step scale: the streamed features are rescaled by s = sqrt(step_ref_scale
+    / mean|x|^2 of the training rows) and lambda by s^2 — an exact
+    reparametrization (same objective, same minimizer, same reported loss)
+    under which the per-sample weight step eta_t*|s x|^2 sits in the regime
+    eta0 was tuned in, while the bias step stays eta_t (None: s = 1). See
+    STEP_REF_SCALE.
 
     Every N/EVAL_DIVISOR samples the TRAINING ridge objective of the decoded
     model is evaluated (alongside the held-out accuracy, recorded for
@@ -447,6 +517,17 @@ def stream_until_terminal(model, X_train, y_train, X_test, y_test, seed, lam, ba
     weights = class_weights(y_train, balanced)
     sample_weights = np.where(y_train > 0, weights[1.0], weights[-1.0])
     train_feats = np.unique(X_train.indices)
+    if step_ref_scale is not None:
+        run_scale = float(np.mean(np.asarray(X_train.power(2).sum(axis=1)).ravel()))
+        s2 = step_ref_scale / run_scale
+        if s2 != 1.0:
+            # w_scaled = w / s reproduces the same predictions and, with
+            # lam*s^2, the same penalty value: nothing but the optimizer's
+            # coordinates change.
+            X_train = X_train * np.sqrt(s2)
+            X_test = X_test * np.sqrt(s2)
+            lam = lam * s2
+    class_rows = [np.flatnonzero(y_train < 0), np.flatnonzero(y_train > 0)]
     rng = np.random.default_rng(seed)
     eval_every = max(1, n_train // EVAL_DIVISOR)
     patience = n_train
@@ -462,7 +543,17 @@ def stream_until_terminal(model, X_train, y_train, X_test, y_test, seed, lam, ba
     while t < cap:
         if block is None or bpos == len(block):
             # Blocked draws reproduce the single-draw sequence bit-exactly.
-            block, bpos = rng.integers(n_train, size=RNG_BLOCK), 0
+            if balanced:
+                cls = rng.integers(2, size=RNG_BLOCK)
+                pos = rng.random(RNG_BLOCK)
+                block = np.empty(RNG_BLOCK, dtype=np.int64)
+                for c in (0, 1):
+                    m = cls == c
+                    rows = class_rows[c]
+                    block[m] = rows[(pos[m] * len(rows)).astype(np.int64)]
+            else:
+                block = rng.integers(n_train, size=RNG_BLOCK)
+            bpos = 0
         idx = int(block[bpos])
         bpos += 1
         lo, hi = indptr[idx], indptr[idx + 1]
@@ -471,7 +562,7 @@ def stream_until_terminal(model, X_train, y_train, X_test, y_test, seed, lam, ba
             indices[lo:hi],
             data[lo:hi],
             y_train[idx],
-            weights[y_train[idx]],
+            1.0,
             eta0 / np.sqrt(t),
             lam,
         )
@@ -498,7 +589,7 @@ def stream_until_terminal(model, X_train, y_train, X_test, y_test, seed, lam, ba
     return float(best_acc), float(best_loss), t, trajectory
 
 
-def run_one(method, budget, X, y, seed, alpha, balanced, eta0):
+def run_one(method, budget, X, y, seed, alpha, balanced, eta0, step_ref_scale=None):
     """One (method, budget, seed) run on one task; returns a record dict."""
     idx_train, idx_test = train_test_split(
         np.arange(X.shape[0]),
@@ -560,6 +651,7 @@ def run_one(method, budget, X, y, seed, alpha, balanced, eta0):
             lam,
             balanced,
             eta0,
+            step_ref_scale,
         )
         return {
             "accuracy": acc,
@@ -572,7 +664,8 @@ def run_one(method, budget, X, y, seed, alpha, balanced, eta0):
     model = ADAPTIVE_MODELS[method](budget, X.shape[1], seed)
     lam = alpha / len(idx_train)
     acc, train_loss, samples, trajectory = stream_until_terminal(
-        model, X_train, y_train, X_test, y_test, seed, lam, balanced, eta0
+        model, X_train, y_train, X_test, y_test, seed, lam, balanced, eta0,
+        step_ref_scale,
     )
     space = model.space
     return {
@@ -658,12 +751,16 @@ def tune_eta(datasets):
             np.arange(X.shape[0]), test_size=0.2, stratify=y, random_state=seed
         )
         lam = alpha / len(idx_train)
-        entry = {"task": name}
+        X_train = X[idx_train].tocsr()
+        # The tuning problem defines the reference feature scale (ratio 1).
+        ref_scale = float(np.mean(np.asarray(X_train.power(2).sum(axis=1)).ravel()))
+        entry = {"task": name, "step_ref_scale": ref_scale}
+        print(f"{dataset}: step reference scale (mean |x|^2) = {ref_scale:.4f}")
         for eta0 in ETA0_CANDIDATES:
             model = DenseRidgeSGD(X.shape[1], seed)
             acc, train_loss, samples, _ = stream_until_terminal(
                 model,
-                X[idx_train].tocsr(),
+                X_train,
                 y[idx_train],
                 X[idx_test].tocsr(),
                 y[idx_test],
@@ -671,6 +768,7 @@ def tune_eta(datasets):
                 lam,
                 balanced,
                 eta0,
+                ref_scale,
             )
             entry[str(eta0)] = {
                 "train_loss": train_loss,
@@ -702,10 +800,11 @@ def dataset_tasks(dataset):
 
 
 def run_dataset(dataset, n_jobs):
-    eta0 = ETA0[dataset]
-    if eta0 is None:
+    eta0, step_ref_scale = ETA0[dataset], STEP_REF_SCALE[dataset]
+    if eta0 is None or step_ref_scale is None:
         raise RuntimeError(
-            f"ETA0[{dataset!r}] is unset; run --tune-eta and record the value"
+            f"ETA0/STEP_REF_SCALE[{dataset!r}] unset; run --tune-eta and "
+            "record the values"
         )
     seeds = sketch_utils.sample_sketch_seeds(n_sketch_seeds)
     alpha, balanced = ALPHA[dataset], BALANCED[dataset]
@@ -722,6 +821,9 @@ def run_dataset(dataset, n_jobs):
         "budgets": budgets,
         "n_tasks": len(tasks),
         "eta0": eta0,
+        "step_ref_scale": step_ref_scale,
+        "sampling": "class_balanced" if balanced else "uniform",
+        "l2_decay": "proximal",
         "reported": REPORTED_VALUE,
         "arithmetic": "float64",
     }
@@ -779,7 +881,8 @@ def run_dataset(dataset, n_jobs):
     if jobs:
         results = Parallel(n_jobs=n_jobs, return_as="generator")(
             delayed(run_one)(
-                method, budget, tasks[ti][1], tasks[ti][2], seed, alpha, balanced, eta0
+                method, budget, tasks[ti][1], tasks[ti][2], seed, alpha, balanced,
+                eta0, step_ref_scale,
             )
             for budget, method, ti, seed in jobs
         )
@@ -867,13 +970,23 @@ QOS_STYLE = dict(
 # hashing curve reaches chance level on IMDb at small budgets and spans
 # 0.71-0.92 on PBMC68k.
 ACC_AXES = {
-    "imdb": dict(xlim=(0.48, 0.92), xticks=[0.50, 0.60, 0.70, 0.80, 0.90]),
-    "pbmc68k": dict(
-        xlim=(0.69, 0.93), xticks=[0.70, 0.75, 0.80, 0.85, 0.90]
-    ),
+    "mean": {
+        "imdb": dict(xlim=(0.48, 0.92), xticks=[0.50, 0.60, 0.70, 0.80, 0.90]),
+        "pbmc68k": dict(
+            xlim=(0.69, 0.93), xticks=[0.70, 0.75, 0.80, 0.85, 0.90]
+        ),
+    },
+    # Medians over the PBMC68k pairs sit ~6pp above the means (the pair
+    # distribution is heavy-tailed), so the median view needs its own window.
+    "median": {
+        "imdb": dict(xlim=(0.48, 0.92), xticks=[0.50, 0.60, 0.70, 0.80, 0.90]),
+        "pbmc68k": dict(
+            xlim=(0.595, 0.995), xticks=[0.60, 0.70, 0.80, 0.90, 1.00]
+        ),
+    },
 }
 PANEL_TITLES = {"imdb": "IMDb classification", "pbmc68k": "PBMC68k classification"}
-YLIM = (1e1, 1e7)
+YLIM = (1e1, 2e5)
 
 
 def _interp_with_end_slopes(x, xp, fp):
@@ -909,7 +1022,21 @@ def _baseline_curves(data):
     return curves
 
 
-def panel_stats(data):
+def median_and_robust_sem(values):
+    """Median with a robust standard error: 1.2533 * (1.4826 * MAD) / sqrt(n),
+    the asymptotic SE of the median with sigma estimated by the scaled MAD."""
+    values = np.asarray(values, dtype=float)
+    med = float(np.median(values))
+    if len(values) < 2:
+        return med, 0.0
+    mad = float(np.median(np.abs(values - med)))
+    return med, 1.2533 * 1.4826 * mad / np.sqrt(len(values))
+
+
+AGGREGATORS = {"mean": sketch_utils.mean_and_sem, "median": median_and_robust_sem}
+
+
+def panel_stats(data, aggregate="mean"):
     """Per-method curve statistics.
 
     The difference panels pair each run against the feature hashing baseline
@@ -941,8 +1068,8 @@ def panel_stats(data):
                     for r in runs
                 ]
             )
-            mean, sem = sketch_utils.mean_and_sem(acc)
-            dmean, dsem = sketch_utils.mean_and_sem(diffs)
+            mean, sem = AGGREGATORS[aggregate](acc)
+            dmean, dsem = AGGREGATORS[aggregate](diffs)
             for field, value in (
                 ("space", space),
                 ("mean", mean),
@@ -988,10 +1115,10 @@ def _signed_percent(value, _):
     return "0%" if value == 0 else f"{100 * value:+g}%"
 
 
-def plot_qos_point(ax, qos_reference):
-    """The full-matrix QOS reference as a single point (mean +- SEM)."""
+def plot_qos_point(ax, qos_reference, aggregate="mean"):
+    """The full-matrix QOS reference as a single point (center +- error)."""
     acc = np.array([r["accuracy"] for r in qos_reference["runs"]])
-    mean, sem = sketch_utils.mean_and_sem(acc)
+    mean, sem = AGGREGATORS[aggregate](acc)
     space = float(np.mean([r["space"] for r in qos_reference["runs"]]))
     if sem > 0:
         ax.plot(
@@ -1027,14 +1154,14 @@ def qos_legend_handle():
     )
 
 
-def plot_survey(json_dir, output_pdf):
+def plot_survey(json_dir, output_pdf, aggregate="mean"):
     fig, axes = plt.subplots(1, 4, figsize=(13, 3.9))
     datasets = ["imdb", "pbmc68k"]
     stats_by_dataset = {}
     for dataset in datasets:
         with open(os.path.join(json_dir, f"survey_adaptive_{dataset}.json")) as f:
             data = json.load(f)
-        stats_by_dataset[dataset] = (data, panel_stats(data))
+        stats_by_dataset[dataset] = (data, panel_stats(data, aggregate))
 
     # Panels grouped per dataset: accuracy then difference, IMDb first.
     for col, dataset in enumerate(datasets):
@@ -1050,8 +1177,8 @@ def plot_survey(json_dir, output_pdf):
                 stats[m]["space"][order],
             )
         if "qos_reference" in data:
-            plot_qos_point(ax, data["qos_reference"])
-        cfg = ACC_AXES[dataset]
+            plot_qos_point(ax, data["qos_reference"], aggregate)
+        cfg = ACC_AXES[aggregate][dataset]
         ax.set_xlim(*cfg["xlim"])
         ax.set_xticks(cfg["xticks"])
         ax.xaxis.set_major_formatter(mticker.FuncFormatter(_percent))
@@ -1182,7 +1309,8 @@ def run_pbmc_top_pair(n_jobs):
     from tqdm import tqdm
 
     results = Parallel(n_jobs=n_jobs, return_as="generator")(
-        delayed(run_one)(m, b, X, y, s, alpha, balanced, eta0) for b, m, s in jobs
+        delayed(run_one)(m, b, X, y, s, alpha, balanced, eta0, STEP_REF_SCALE["pbmc68k"])
+        for b, m, s in jobs
     )
     raw = {}
     for (b, m, s), res in zip(jobs, tqdm(results, total=len(jobs), desc="runs")):
@@ -1195,6 +1323,9 @@ def run_pbmc_top_pair(n_jobs):
         "sketch_seeds": seeds,
         "budgets": budgets,
         "eta0": eta0,
+        "step_ref_scale": STEP_REF_SCALE["pbmc68k"],
+        "sampling": "class_balanced" if balanced else "uniform",
+        "l2_decay": "proximal",
         "alpha": alpha,
         "balanced": balanced,
         "reported": REPORTED_VALUE,
@@ -1408,6 +1539,13 @@ def main():
     parser.add_argument("--json-dir", type=str, default=".")
     parser.add_argument("--out", type=str, default="survey_adaptive.pdf")
     parser.add_argument(
+        "--aggregate",
+        choices=list(AGGREGATORS),
+        default="mean",
+        help="per-point aggregation over runs: mean +- SEM (default) or "
+        "median +- robust SE",
+    )
+    parser.add_argument(
         "--out-convergence", type=str, default="survey_adaptive_convergence.pdf"
     )
     parser.add_argument(
@@ -1440,7 +1578,7 @@ def main():
             print(f"Inserted the full-matrix QOS reference into {path}")
         ran = True
     if args.plot:
-        plot_survey(args.json_dir, args.out)
+        plot_survey(args.json_dir, args.out, args.aggregate)
         ran = True
     if args.pbmc_top_pair:
         run_pbmc_top_pair(args.n_jobs)

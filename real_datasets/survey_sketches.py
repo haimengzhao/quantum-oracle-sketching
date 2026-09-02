@@ -437,7 +437,7 @@ TOP_AXES = {
     ),
 }
 BOTTOM_XLABEL = "Diff. from feature hashing"
-YLIM = (1e1, 1e7)
+YLIM = (1e1, 2e5)
 
 QOS_STYLE = dict(
     color=sweep_utils.COLORS["quantum"],

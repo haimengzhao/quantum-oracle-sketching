@@ -221,13 +221,18 @@ trained by streaming ridge SGD — AWM-Sketch (SIGMOD 2018) and MISSION
 (ICML 2018) — on IMDb and PBMC68k classification, under a total
 scalar-register budget that counts all adaptive state (sketch counters and
 heap/active-set ids and values). The stream
-draws single rows uniformly at random from an 80/20 train split and runs
+draws single rows at random from an 80/20 train split (uniformly, or
+class-balanced where the task uses balanced class weights — the
+importance-sampling realization of those weights) and runs
 until the training ridge loss stops decreasing over a window of N samples;
 the reported value is the held-out accuracy at minimal training loss, so
 neither stopping nor model selection touches the test split. The shared
 learning-rate schedule eta0/sqrt(t) is selected per dataset with
 `--tune-eta` (full-dimensional SGD on the untruncated data, also by
-minimal training loss). Compute and plot with:
+minimal training loss); each run rescales its streamed features (and
+lambda, an exact reparametrization) so their mean squared norm matches the
+tuning problem's, keeping the per-sample step in the tuned regime. Compute
+and plot with:
 
 ```bash
 python survey_adaptive.py --tune-eta   # once; records survey_adaptive_eta0.json
