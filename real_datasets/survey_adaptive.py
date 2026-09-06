@@ -124,7 +124,7 @@ BUDGETS = {
     "pbmc68k": [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768],
 }
 
-N_PAIRS = 20  # first 20 of the main figures' 100 random PBMC68k class pairs
+N_PAIRS = 100  # all of the main figures' 100 random PBMC68k class pairs
 
 EVAL_DIVISOR = 5  # evaluate every N/EVAL_DIVISOR samples
 IMPROVEMENT_TOL = 1e-4
@@ -871,11 +871,24 @@ def run_dataset(dataset, n_jobs):
         budget: [m for m in METHODS if m not in raw.get(str(budget), {})]
         for budget in budgets
     }
+    # Duplicate tasks (the PBMC68k pairs are drawn with replacement) are
+    # identical inputs and every run is deterministic, so each distinct task
+    # is computed once and its records are replicated for the duplicates —
+    # byte-identical to computing every task, at a fraction of the cost. The
+    # records keep the full task list and its order, so duplicates weigh in
+    # the statistics exactly as in the main figures.
+    representative = {}
+    first_of = {}
+    for ti, (name, _, _) in enumerate(tasks):
+        representative[ti] = first_of.setdefault(name, ti)
+    unique_tis = sorted(set(representative.values()))
+    if len(unique_tis) < len(tasks):
+        print(f"{len(unique_tis)} distinct tasks (duplicates replicated)")
     jobs = [
         (budget, method, ti, seed)
         for budget in budgets
         for method in missing[budget]
-        for ti in range(len(tasks))
+        for ti in unique_tis
         for seed in seeds
     ]
     if jobs:
@@ -886,25 +899,31 @@ def run_dataset(dataset, n_jobs):
             )
             for budget, method, ti, seed in jobs
         )
-        pending = {
-            budget: {m: {"runs": []} for m in missing[budget]}
-            for budget in budgets
-            if missing[budget]
-        }
+        pending = {budget: {} for budget in budgets if missing[budget]}
         remaining = {
-            budget: len(missing[budget]) * len(tasks) * len(seeds)
+            budget: len(missing[budget]) * len(unique_tis) * len(seeds)
             for budget in pending
         }
         for (budget, method, ti, seed), res in zip(
             jobs, tqdm(results, total=len(jobs), desc="runs")
         ):
-            pending[budget][method]["runs"].append(
-                {"task": tasks[ti][0], "seed": seed, **res}
-            )
+            pending[budget][(method, ti, seed)] = res
             remaining[budget] -= 1
             if remaining[budget] == 0:
+                done = pending.pop(budget)
                 record = dict(raw.get(str(budget), {}))
-                record.update(pending.pop(budget))
+                for m in missing[budget]:
+                    record[m] = {
+                        "runs": [
+                            {
+                                "task": tasks[ti][0],
+                                "seed": seed,
+                                **done[(m, representative[ti], seed)],
+                            }
+                            for ti in range(len(tasks))
+                            for seed in seeds
+                        ]
+                    }
                 raw[str(budget)] = {m: record[m] for m in METHODS}
                 _write_json_atomic(
                     checkpoint_path, {**fingerprint, "raw_data_by_budget": raw}
@@ -969,21 +988,13 @@ QOS_STYLE = dict(
 # Slightly wider than the main-figure windows: the streaming-SGD feature
 # hashing curve reaches chance level on IMDb at small budgets and spans
 # 0.71-0.92 on PBMC68k.
+# Accuracy axes: identical to the sketch-mode main figures
+# (imdb_combine_fig.py / pbmc68k_combine_fig.py), for every aggregate.
 ACC_AXES = {
-    "mean": {
-        "imdb": dict(xlim=(0.48, 0.92), xticks=[0.50, 0.60, 0.70, 0.80, 0.90]),
-        "pbmc68k": dict(
-            xlim=(0.69, 0.93), xticks=[0.70, 0.75, 0.80, 0.85, 0.90]
-        ),
-    },
-    # Medians over the PBMC68k pairs sit ~6pp above the means (the pair
-    # distribution is heavy-tailed), so the median view needs its own window.
-    "median": {
-        "imdb": dict(xlim=(0.48, 0.92), xticks=[0.50, 0.60, 0.70, 0.80, 0.90]),
-        "pbmc68k": dict(
-            xlim=(0.595, 0.995), xticks=[0.60, 0.70, 0.80, 0.90, 1.00]
-        ),
-    },
+    "imdb": dict(xlim=(0.57, 0.92), xticks=[0.60, 0.70, 0.80, 0.90]),
+    "pbmc68k": dict(
+        xlim=(0.795, 0.91), xticks=[0.80, 0.82, 0.84, 0.86, 0.88, 0.90]
+    ),
 }
 PANEL_TITLES = {"imdb": "IMDb classification", "pbmc68k": "PBMC68k classification"}
 YLIM = (1e1, 2e5)
@@ -1015,10 +1026,11 @@ def _baseline_curves(data):
         xs = np.array([p[0] for p in pts])
         ys = np.array([p[1] for p in pts])
         # PBMC68k pairs are drawn with replacement, so a repeated pair yields
-        # identical duplicate points on its curve; collapse equal sizes.
-        ux, inverse = np.unique(xs, return_inverse=True)
-        uy = np.bincount(inverse, weights=ys) / np.bincount(inverse)
-        curves[key] = (ux, uy)
+        # identical duplicate points on its curve; keep one per size (they are
+        # byte-identical records, so taking the first is exact and keeps the
+        # baseline's own difference identically zero).
+        ux, first = np.unique(xs, return_index=True)
+        curves[key] = (ux, ys[first])
     return curves
 
 
@@ -1178,7 +1190,7 @@ def plot_survey(json_dir, output_pdf, aggregate="mean"):
             )
         if "qos_reference" in data:
             plot_qos_point(ax, data["qos_reference"], aggregate)
-        cfg = ACC_AXES[aggregate][dataset]
+        cfg = ACC_AXES[dataset]
         ax.set_xlim(*cfg["xlim"])
         ax.set_xticks(cfg["xticks"])
         ax.xaxis.set_major_formatter(mticker.FuncFormatter(_percent))
@@ -1260,7 +1272,7 @@ CONV_ACC_COLOR = sweep_utils.COLORS["streaming"]
 CONV_RATIO_SANE_MAX = 10.0
 
 # The PBMC68k panels display the single pair of the two LARGEST cell-type
-# classes, which the survey's 20 random pairs happen not to include;
+# classes, which the survey's 100 random pairs happen not to include;
 # --pbmc-top-pair computes it (same protocol and seeds) into TOP_PAIR_JSON.
 TOP_PAIR_JSON = "survey_adaptive_pbmc68k_top2.json"
 CONV_SOURCES = {"imdb": "survey_adaptive_imdb.json", "pbmc68k": TOP_PAIR_JSON}
@@ -1426,7 +1438,7 @@ def plot_convergence(json_dir, output_pdf):
             continue
         runs = stats["runs"]
         # Fewer runs (IMDb: 5 seeds) can carry more opacity than many
-        # (PBMC68k: 20 pairs x 5 seeds) before the overlay saturates.
+        # (PBMC68k: 100 pairs x 5 seeds) before the overlay saturates.
         alpha = max(0.12, min(0.45, 4.0 / len(runs)))
         for run in runs:
             ax.plot(

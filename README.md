@@ -262,7 +262,7 @@ panel's limits follow its never-exploding runs; exploding curves leave the
 frame and re-enter where they recover. The IMDb panels read the survey
 JSON; the PBMC68k panels show the single pair of the two largest cell-type
 classes (CD8+ Cytotoxic T vs CD8+/CD45RA+ Naive Cytotoxic), which the
-survey's 20 random pairs do not include — `--pbmc-top-pair` computes it
+survey's 100 random pairs do not include — `--pbmc-top-pair` computes it
 under the survey's exact protocol into `survey_adaptive_pbmc68k_top2.json`.
 
 ### Dataset source/setup notes
