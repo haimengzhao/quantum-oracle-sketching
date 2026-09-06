@@ -30,11 +30,14 @@ Protocol (fixed by design review):
   scale (raw rows vs occupancy-normalized hashed buckets) while the bias
   step is unchanged. ETA0 and STEP_REF_SCALE are selected/recorded PER
   DATASET by --tune-eta: full-dimensional SGD ridge on the untruncated data
-  (IMDb: the single task; PBMC68k: the first cell-type pair), first
+  (single-task datasets: that task; pair datasets: the first pair), first
   sampled seed, candidates ETA0_CANDIDATES, chosen by minimal training
   loss.
 - Stopping and selection: every N/5 samples (N = train rows) the TRAINING
-  ridge objective of the decoded model is evaluated; the stream stops once
+  ridge objective is evaluated — the margin loss of the model's predictions
+  plus the L2 penalty on the model's STORED registers (bucket weights;
+  active-set values + counters; count-sketch counters), i.e. the objective
+  each update rule minimizes; the stream stops once
   the lowest training loss so far has not decreased by a relative 1e-4
   over a window of N samples (hard cap 300*N). The reported accuracy is
   the held-out accuracy at MINIMAL training loss, so neither stopping nor
@@ -88,13 +91,16 @@ n_sketch_seeds = 5
 
 # Selected per dataset by --tune-eta on 2026-08-31 (final protocol: class-
 # balanced sampling, step-scale normalization): full-dimensional SGD ridge
-# on the untruncated data (IMDb: the single task; PBMC68k: the first
-# cell-type pair), first sampled seed, chosen by minimal training loss.
+# on the untruncated data (single-task datasets: that task; pair datasets: the first pair), first sampled seed, chosen by minimal training loss.
 # IMDb min losses 0.4994 / 0.4708 / 0.2960 / 0.2488 and PBMC68k 0.0857 /
 # 0.0768 / 0.0741 / diverged for candidates 0.001 / 0.01 / 0.1 / 1.0; the
-# record is kept in survey_adaptive_eta0.json. One value per dataset,
-# shared by all methods.
-ETA0 = {"imdb": 1.0, "pbmc68k": 0.1}
+# record is kept in survey_adaptive_eta0.json. 20news (2026-09-06): 0.4967 /
+# 0.4503 / 0.1774 / 0.1073 -> 1.0; Dorothea: 0.0320 / 0.6374 / diverged /
+# diverged -> 0.001 (its rows have |x|^2 ~ 900, so only the smallest step is
+# stable). One value per dataset, shared by all methods.
+DATASETS = ("imdb", "pbmc68k", "20news", "dorothea")
+
+ETA0 = {"imdb": 1.0, "pbmc68k": 0.1, "20news": 1.0, "dorothea": 0.001}
 ETA0_CANDIDATES = [0.001, 0.01, 0.1, 1.0]
 
 # Feature scale of each dataset's eta0-tuning problem: the mean squared row
@@ -106,15 +112,21 @@ ETA0_CANDIDATES = [0.001, 0.01, 0.1, 1.0]
 # whether the features are raw rows or occupancy-normalized hashed buckets
 # (which shrink |x|^2 by up to ~1000x at small budgets), while the bias
 # step is untouched.
-STEP_REF_SCALE = {"imdb": 1.0, "pbmc68k": 79.6708984375}
+STEP_REF_SCALE = {
+    "imdb": 1.0,
+    "pbmc68k": 79.6708984375,
+    "20news": 0.9810393258426966,
+    "dorothea": 905.5684782608696,
+}
 
 # Marks the stopping/selection convention in every JSON fingerprint, so
 # results recorded under a different convention (e.g. best-so-far or
 # terminal test accuracy) are never reused.
 REPORTED_VALUE = "accuracy_at_min_train_loss"
 
-ALPHA = {"imdb": 10.0, "pbmc68k": 200.0}  # ridge alpha, as in the main sweeps
-BALANCED = {"imdb": False, "pbmc68k": True}
+# Ridge alpha and class weighting, as in each dataset's main sweep script.
+ALPHA = {"imdb": 10.0, "pbmc68k": 200.0, "20news": 1.0, "dorothea": 200.0}
+BALANCED = {"imdb": False, "pbmc68k": True, "20news": False, "dorothea": True}
 
 # Register budgets: the main-figure sketch grids WITHOUT the full-dimension
 # endpoint (at full dimension the comparison would measure optimizer and
@@ -122,9 +134,11 @@ BALANCED = {"imdb": False, "pbmc68k": True}
 BUDGETS = {
     "imdb": [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536],
     "pbmc68k": [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768],
+    "20news": [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768],
+    "dorothea": [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536],
 }
 
-N_PAIRS = 100  # all of the main figures' 100 random PBMC68k class pairs
+N_PAIRS = 100  # all of the main figures' 100 random class pairs (PBMC68k, 20news)
 
 EVAL_DIVISOR = 5  # evaluate every N/EVAL_DIVISOR samples
 IMPROVEMENT_TOL = 1e-4
@@ -174,6 +188,51 @@ def load_pbmc68k_pairs():
     return tasks
 
 
+def load_20news_pairs():
+    """The main figure's 100 random 20 Newsgroups category pairs.
+
+    20news_svm.py seeds Python's `random` with 42 at import and draws
+    `random.sample(all_categories, 2)` once per pair, in order, with no
+    other use of that generator; a `random.Random(42)` instance reproduces
+    the identical sequence. Each pair is vectorized on its own documents
+    (train + test subsets, headers/footers/quotes removed, TF-IDF with
+    min_df=1 and English stop words), exactly as in the sweep.
+    """
+    import random
+
+    from sklearn.datasets import fetch_20newsgroups
+
+    all_cats = fetch_20newsgroups(
+        subset="train", remove=("headers", "footers", "quotes")
+    ).target_names
+    rng = random.Random(42)
+    pairs = [rng.sample(all_cats, 2) for _ in range(N_PAIRS)]
+    tasks = []
+    for cats in pairs:
+        docs, labels = [], []
+        for subset in ("train", "test"):
+            texts, y = fetch_20newsgroups(
+                subset=subset,
+                categories=cats,
+                remove=("headers", "footers", "quotes"),
+                return_X_y=True,
+            )
+            docs += list(texts)
+            labels.append(np.asarray(y))
+        y_all = np.concatenate(labels)
+        X = TfidfVectorizer(min_df=1, stop_words="english").fit_transform(docs)
+        X.eliminate_zeros()
+        tasks.append((X.tocsr(), np.where(y_all > 0, 1.0, -1.0), tuple(cats)))
+    return tasks
+
+
+def load_dorothea():
+    import dorothea_utils
+
+    X, y = dorothea_utils.load_dorothea_data(valid=True)
+    return X.tocsr(), np.where(np.asarray(y) > 0, 1.0, -1.0)
+
+
 # --- streaming ridge SGD models ----------------------------------------------
 #
 # Shared conventions: labels are +-1 and the margin loss is
@@ -211,6 +270,10 @@ class DenseRidgeSGD:
         if self.scale < SCALE_FLOOR:
             self.w *= self.scale
             self.scale = 1.0
+
+    def penalty_energy(self):
+        """|w|^2 of the stored weights (what the L2 decay acts on)."""
+        return self.scale**2 * float(self.w @ self.w)
 
     def decode(self, fi):
         return self.scale * self.w[fi]
@@ -320,6 +383,14 @@ class AWMSketch:
         self.vals *= self.scale
         self.scale = 1.0
 
+    def penalty_energy(self):
+        """Squared norm of the stored registers the L2 decay acts on: the
+        active-set values and the sketch counters (NOT the decoded
+        D-dimensional vector, whose sketch-query tail counts every counter
+        ~D/width times and is dominated by collision noise)."""
+        v = self.vals[: self.fill]
+        return self.scale**2 * (float(v @ v) + float(self.z @ self.z))
+
     def _insert(self, f, w):
         i = self.fill
         self.ids[i] = f
@@ -410,6 +481,12 @@ class TopKSketchModel:
         self.vals *= self.scale
         self.scale = 1.0
 
+    def penalty_energy(self):
+        """Squared norm of the count-sketch counters (all depth rows), the
+        registers the L2 decay acts on; the top-k values are re-queried
+        from them and are not independent parameters."""
+        return self.scale**2 * float(np.sum(self.z * self.z))
+
     def decode(self, fi):
         w = np.zeros(len(fi))
         for pos, f in enumerate(fi.tolist()):
@@ -498,9 +575,11 @@ def stream_until_terminal(
     eta0 was tuned in, while the bias step stays eta_t (None: s = 1). See
     STEP_REF_SCALE.
 
-    Every N/EVAL_DIVISOR samples the TRAINING ridge objective of the decoded
-    model is evaluated (alongside the held-out accuracy, recorded for
-    reporting only). The stream stops once the lowest training loss so far
+    Every N/EVAL_DIVISOR samples the TRAINING ridge objective is evaluated:
+    the (weighted) margin loss of the model's predictions on the training
+    split plus (lambda/2) times the squared norm of the model's stored
+    registers (`penalty_energy`), alongside the held-out accuracy (recorded
+    for reporting only). The stream stops once the lowest training loss so far
     has not decreased by a relative IMPROVEMENT_TOL over a window of N
     samples (hard cap SAMPLE_CAP_FACTOR*N). The reported accuracy is the one
     observed at MINIMAL training loss, so neither stopping nor model
@@ -569,13 +648,17 @@ def stream_until_terminal(
         if t % eval_every == 0:
             # decoded_weights fills a float64 vector, so the loss matvec
             # and reductions run in float64.
+            # Margin loss of the model's actual predictions plus the ridge
+            # penalty on the model's STORED parameters (the objective its
+            # update rule minimizes; for hashing-SGD identical to |w|^2 of
+            # the bucket weights, matching the exact baseline's penalty).
             w_hat = decoded_weights(model, train_feats, n_features)
             loss = ridge_objective(
                 X_train @ w_hat + model.bias,
                 y_train,
                 sample_weights,
                 lam,
-                float(w_hat @ w_hat),
+                model.penalty_energy(),
             )
             acc = float(np.mean((test_scores(model, X_test, n_features) >= 0) == (y_test > 0)))
             trajectory.append([t, round(loss, 8), round(acc, 6)])
@@ -733,8 +816,7 @@ def _write_json_atomic(path, data):
 def tune_eta(datasets):
     """Select ETA0 per dataset by a full-dimensional SGD ridge run.
 
-    One run per candidate on the untruncated data (IMDb: the single task;
-    PBMC68k: the first cell-type pair), first sampled seed, the dataset's
+    One run per candidate on the untruncated data (single-task datasets: that task; pair datasets: the first pair), first sampled seed, the dataset's
     own alpha and class weighting; chosen by MINIMAL TRAINING LOSS (ties
     break toward the smaller eta0), so the selection is test-blind like the
     runs themselves. Records survey_adaptive_eta0.json.
@@ -795,7 +877,10 @@ def dataset_tasks(dataset):
     if dataset == "imdb":
         X, y = load_imdb()
         return [("imdb", X, y)]
-    tasks = load_pbmc68k_pairs()
+    if dataset == "dorothea":
+        X, y = load_dorothea()
+        return [("dorothea", X, y)]
+    tasks = load_pbmc68k_pairs() if dataset == "pbmc68k" else load_20news_pairs()
     return [(f"{c1}|{c2}", X, y) for X, y, (c1, c2) in tasks]
 
 
@@ -824,6 +909,7 @@ def run_dataset(dataset, n_jobs):
         "step_ref_scale": step_ref_scale,
         "sampling": "class_balanced" if balanced else "uniform",
         "l2_decay": "proximal",
+        "objective_penalty": "stored_registers",
         "reported": REPORTED_VALUE,
         "arithmetic": "float64",
     }
@@ -953,37 +1039,40 @@ def run_dataset(dataset, n_jobs):
 
 # Solid lines are streaming-SGD results under the shared protocol; the
 # exact-solver feature hashing reference is dashed.
+# Colors, markers and (C)/(Q) legend labels come from sweep_utils so this
+# figure, the main-figure panels and the legend strip share one style.
 STYLES = {
     "hashing": dict(
         color=sweep_utils.COLORS["streaming"],
         linestyle="--",
-        marker="P",
+        marker=sweep_utils.MARKERS["streaming"],
         marker_size=50,
         filled=False,
-        label="Feature hashing (exact)",
+        label=sweep_utils.LEGEND_LABELS["streaming"] + " (exact)",
     ),
     "hashing_sgd": dict(
         color=sweep_utils.COLORS["streaming"],
         linestyle="-",
-        marker="P",
+        marker=sweep_utils.MARKERS["streaming"],
         marker_size=50,
         filled=True,
-        label="Feature hashing (SGD)",
+        label=sweep_utils.LEGEND_LABELS["streaming"] + " (SGD)",
     ),
     "awm": dict(
-        color="#2A8C55", linestyle="-", marker="o", marker_size=42, filled=False,
-        label="AWM-Sketch",
+        color=sweep_utils.COLORS["awm"], linestyle="-", marker=sweep_utils.MARKERS["awm"],
+        marker_size=42, filled=False, label=sweep_utils.LEGEND_LABELS["awm"],
     ),
     "mission": dict(
-        color="#7B3294", linestyle="-", marker="^", marker_size=42, filled=False,
-        label="MISSION",
+        color=sweep_utils.COLORS["mission"], linestyle="-",
+        marker=sweep_utils.MARKERS["mission"], marker_size=42, filled=False,
+        label=sweep_utils.LEGEND_LABELS["mission"],
     ),
 }
 QOS_STYLE = dict(
     color=sweep_utils.COLORS["quantum"],
-    marker="D",
+    marker=sweep_utils.MARKERS["quantum"],
     marker_size=45,
-    label="Quantum oracle sketching",
+    label=sweep_utils.LEGEND_LABELS["quantum"],
 )
 # Slightly wider than the main-figure windows: the streaming-SGD feature
 # hashing curve reaches chance level on IMDb at small budgets and spans
@@ -996,6 +1085,10 @@ ACC_AXES = {
         xlim=(0.795, 0.91), xticks=[0.80, 0.82, 0.84, 0.86, 0.88, 0.90]
     ),
 }
+# Difference panels: symlog with a per-dataset linear window (its edge is
+# the first tick). IMDb uses +-7% so the window frames AWM's peak and reads
+# with a width similar to the PBMC68k panel.
+DIFF_LINTHRESH = {"imdb": 7e-2, "pbmc68k": 5e-2}
 PANEL_TITLES = {"imdb": "IMDb classification", "pbmc68k": "PBMC68k classification"}
 YLIM = (1e1, 2e5)
 
@@ -1213,12 +1306,14 @@ def plot_survey(json_dir, output_pdf, aggregate="mean"):
             np.max(np.abs(stats[m]["dmean"]) + stats[m]["dsem"])
             for m in data["methods"]
         )
-        # Linear within +-5%, log-compressed beyond. Ticks step by factors
-        # of 5 (5%, 25%, ...): decade steps from 5% collide at panel width.
-        dmax = 1.6 * max(dmax, 5e-2)
-        ax.set_xscale("symlog", linthresh=5e-2, linscale=0.5)
+        # Symlog: linear within +-DIFF_LINTHRESH[dataset], log-compressed
+        # beyond; ticks at the threshold and factor-5 multiples of it
+        # (decade steps from the threshold collide at panel width).
+        lt = DIFF_LINTHRESH[dataset]
+        dmax = 1.6 * max(dmax, lt)
+        ax.set_xscale("symlog", linthresh=lt, linscale=0.5)
         ax.set_xlim(-dmax, dmax)
-        ticks = [t for t in (5e-2, 25e-2, 125e-2) if t <= dmax]
+        ticks = [t for t in (lt, 5 * lt, 25 * lt) if t <= dmax]
         ax.set_xticks([-t for t in reversed(ticks)] + [0] + ticks)
         ax.xaxis.set_major_formatter(mticker.FuncFormatter(_signed_percent))
         ax.set_xlabel("Diff. from feature hashing (exact)")
@@ -1338,6 +1433,7 @@ def run_pbmc_top_pair(n_jobs):
         "step_ref_scale": STEP_REF_SCALE["pbmc68k"],
         "sampling": "class_balanced" if balanced else "uniform",
         "l2_decay": "proximal",
+        "objective_penalty": "stored_registers",
         "alpha": alpha,
         "balanced": balanced,
         "reported": REPORTED_VALUE,
@@ -1521,7 +1617,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Adaptive sketching survey (IMDb and PBMC68k classification)."
     )
-    parser.add_argument("--dataset", choices=["imdb", "pbmc68k"])
+    parser.add_argument("--dataset", choices=list(DATASETS))
     parser.add_argument(
         "--tune-eta",
         action="store_true",
@@ -1570,13 +1666,13 @@ def main():
 
     ran = False
     if args.tune_eta:
-        tune_eta([args.dataset] if args.dataset else ["imdb", "pbmc68k"])
+        tune_eta([args.dataset] if args.dataset else list(DATASETS))
         ran = True
     if args.dataset and not args.tune_eta:
         run_dataset(args.dataset, args.n_jobs)
         ran = True
     if args.add_qos_ref:
-        for dataset in ("imdb", "pbmc68k"):
+        for dataset in DATASETS:
             path = os.path.join(args.json_dir, f"survey_adaptive_{dataset}.json")
             if not os.path.exists(path):
                 print(f"{path} not found; skipping")

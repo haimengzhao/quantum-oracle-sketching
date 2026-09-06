@@ -21,7 +21,12 @@ num_markers = 20
 rare_extra_markers = [-3]
 
 
-def plot_accuracy_panel(ax, stats, mode="rare", jl_stats=None):
+def plot_accuracy_panel(
+    ax, stats, mode="rare", jl_stats=None, labels="text", classical_alpha=1.0,
+    adaptive=None,
+):
+    # Floating in-panel labels only in text mode; an external legend otherwise.
+    text = ax.text if labels == "text" else (lambda *args, **kwargs: None)
     for k in sweep_utils.METHOD_KEYS:
         xm, xs, ym = sweep_utils.sort_by_space(
             stats[k]["metric_mean"], stats[k]["metric_sem"], stats[k]["space_mean"]
@@ -32,17 +37,21 @@ def plot_accuracy_panel(ax, stats, mode="rare", jl_stats=None):
             xm,
             xs,
             ym,
+            alpha=(1.0 if k == "quantum" else classical_alpha),
+            emphasize=(k == "quantum" and classical_alpha < 1.0),
             label=(sketch_utils.streaming_label(mode) if k == "streaming" else None),
             show_all_markers=(mode != "rare"),
             num_markers=num_markers,
             extra_marker_indices=rare_extra_markers,
         )
     if jl_stats is not None:
-        sweep_utils.plot_jl_overlay(ax, jl_stats)
+        sweep_utils.plot_jl_overlay(ax, jl_stats, alpha=classical_alpha)
 
+    if adaptive is not None:
+        sweep_utils.plot_adaptive_overlay(ax, adaptive, alpha=classical_alpha)
     halo = [pe.withStroke(linewidth=3, foreground="white")]
     if mode in ("bucket", "jl"):
-        ax.text(
+        text(
             0.2,
             0.82,
             "Classical sparse / QRAM",
@@ -51,7 +60,7 @@ def plot_accuracy_panel(ax, stats, mode="rare", jl_stats=None):
             path_effects=halo,
             transform=ax.transAxes,
         )
-        ax.text(
+        text(
             0.78,
             0.58,
             sketch_utils.streaming_label(mode),
@@ -61,7 +70,7 @@ def plot_accuracy_panel(ax, stats, mode="rare", jl_stats=None):
             transform=ax.transAxes,
             ha="right",
         )
-        ax.text(
+        text(
             0.15,
             0.06,
             "Quantum oracle sketching",
@@ -71,7 +80,7 @@ def plot_accuracy_panel(ax, stats, mode="rare", jl_stats=None):
             transform=ax.transAxes,
         )
         if jl_stats is not None:
-            ax.text(
+            text(
                 0.58,
                 0.46,
                 "Classical sparse JL",
@@ -82,7 +91,7 @@ def plot_accuracy_panel(ax, stats, mode="rare", jl_stats=None):
                 ha="right",
             )
     else:
-        ax.text(
+        text(
             0.83,
             9e4,
             "Classical sparse / QRAM",
@@ -90,7 +99,7 @@ def plot_accuracy_panel(ax, stats, mode="rare", jl_stats=None):
             fontsize=10,
             path_effects=halo,
         )
-        ax.text(
+        text(
             0.934,
             9e3,
             sketch_utils.streaming_label(mode),
@@ -99,7 +108,7 @@ def plot_accuracy_panel(ax, stats, mode="rare", jl_stats=None):
             path_effects=halo,
             ha="right",
         )
-        ax.text(
+        text(
             0.94,
             7e1,
             "Quantum oracle sketching",
@@ -125,7 +134,11 @@ def plot_accuracy_panel(ax, stats, mode="rare", jl_stats=None):
     ax.set_title("Binary classification")
 
 
-def plot_variance_panel(ax, stats, mode="rare", jl_stats=None):
+def plot_variance_panel(
+    ax, stats, mode="rare", jl_stats=None, labels="text", classical_alpha=1.0
+):
+    # Floating in-panel labels only in text mode; an external legend otherwise.
+    text = ax.text if labels == "text" else (lambda *args, **kwargs: None)
     for k in sweep_utils.METHOD_KEYS:
         xm, xs, ym = sweep_utils.sort_by_space(
             stats[k]["metric_mean"], stats[k]["metric_sem"], stats[k]["space_mean"]
@@ -136,17 +149,19 @@ def plot_variance_panel(ax, stats, mode="rare", jl_stats=None):
             xm,
             xs,
             ym,
+            alpha=(1.0 if k == "quantum" else classical_alpha),
+            emphasize=(k == "quantum" and classical_alpha < 1.0),
             label=(sketch_utils.streaming_label(mode) if k == "streaming" else None),
             show_all_markers=(mode != "rare"),
             num_markers=num_markers,
             extra_marker_indices=rare_extra_markers,
         )
     if jl_stats is not None:
-        sweep_utils.plot_jl_overlay(ax, jl_stats)
+        sweep_utils.plot_jl_overlay(ax, jl_stats, alpha=classical_alpha)
 
     halo = [pe.withStroke(linewidth=3, foreground="white")]
     if mode in ("bucket", "jl"):
-        ax.text(
+        text(
             0.2,
             0.85,
             "Classical sparse / QRAM",
@@ -155,7 +170,7 @@ def plot_variance_panel(ax, stats, mode="rare", jl_stats=None):
             path_effects=halo,
             transform=ax.transAxes,
         )
-        ax.text(
+        text(
             0.98,
             0.58,
             sketch_utils.streaming_label(mode),
@@ -165,7 +180,7 @@ def plot_variance_panel(ax, stats, mode="rare", jl_stats=None):
             transform=ax.transAxes,
             ha="right",
         )
-        ax.text(
+        text(
             0.15,
             0.06,
             "Quantum oracle sketching",
@@ -175,7 +190,7 @@ def plot_variance_panel(ax, stats, mode="rare", jl_stats=None):
             transform=ax.transAxes,
         )
         if jl_stats is not None:
-            ax.text(
+            text(
                 0.58,
                 0.75,
                 "Classical sparse JL",
@@ -186,7 +201,7 @@ def plot_variance_panel(ax, stats, mode="rare", jl_stats=None):
                 ha="right",
             )
     else:
-        ax.text(
+        text(
             0.535,
             9e4,
             "Classical sparse / QRAM",
@@ -194,7 +209,7 @@ def plot_variance_panel(ax, stats, mode="rare", jl_stats=None):
             fontsize=10,
             path_effects=halo,
         )
-        ax.text(
+        text(
             0.98,
             9e3,
             sketch_utils.streaming_label(mode),
@@ -203,7 +218,7 @@ def plot_variance_panel(ax, stats, mode="rare", jl_stats=None):
             path_effects=halo,
             ha="right",
         )
-        ax.text(
+        text(
             1,
             7e1,
             "Quantum oracle sketching",
@@ -267,6 +282,31 @@ def main():
         "--mode",
         choices=["rare", "bucket", "jl", "bucket_jl"],
         required=True,
+    )
+    parser.add_argument(
+        "--adaptive",
+        action="store_true",
+        help="overlay the adaptive sketching curves (AWM-Sketch, MISSION) from "
+        "the adaptive survey JSON on the classification panel",
+    )
+    parser.add_argument(
+        "--adaptive-json",
+        type=str,
+        default="survey_adaptive_20news.json",
+        help="adaptive survey JSON (with --adaptive)",
+    )
+    parser.add_argument(
+        "--labels",
+        choices=["text", "none"],
+        default="text",
+        help="in-panel method labels (text) or none (for an external legend)",
+    )
+    parser.add_argument(
+        "--classical-alpha",
+        type=float,
+        default=1.0,
+        help="opacity of the classical curves; <1 also draws the quantum curve "
+        "heavier and on top",
     )
     args = parser.parse_args()
 
@@ -333,6 +373,7 @@ def main():
                     f"{path} was not generated with balanced signed sparse JL"
                 )
 
+    out_given = args.out is not None
     if args.out is None:
         if args.mode == "bucket":
             args.out = "20newsgroups_bucket_combine.pdf"
@@ -342,6 +383,12 @@ def main():
             args.out = "20newsgroups_jl_combine.pdf"
         else:
             args.out = "20newsgroups_combine.pdf"
+
+    if args.adaptive and not out_given:
+        args.out = args.out.replace("_combine.pdf", "_adaptive_combine.pdf")
+    adaptive_curves = (
+        sweep_utils.load_adaptive_curves(args.adaptive_json) if args.adaptive else None
+    )
 
     plot_mode = "bucket" if args.mode == "bucket_jl" else args.mode
     accuracy_stats = sweep_utils.load_sweep_stats(accuracy_data, "accuracy")
@@ -358,10 +405,21 @@ def main():
 
     fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(6, 3.5), sharey=True)
     plot_accuracy_panel(
-        ax_left, accuracy_stats, mode=plot_mode, jl_stats=jl_accuracy_stats
+        ax_left,
+        accuracy_stats,
+        mode=plot_mode,
+        jl_stats=jl_accuracy_stats,
+        labels=args.labels,
+        classical_alpha=args.classical_alpha,
+        adaptive=adaptive_curves,
     )
     plot_variance_panel(
-        ax_right, variance_stats, mode=plot_mode, jl_stats=jl_variance_stats
+        ax_right,
+        variance_stats,
+        mode=plot_mode,
+        jl_stats=jl_variance_stats,
+        labels=args.labels,
+        classical_alpha=args.classical_alpha,
     )
 
     ax_right.tick_params(axis="y", labelleft=False)

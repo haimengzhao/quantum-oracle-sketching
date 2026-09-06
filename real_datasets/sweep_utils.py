@@ -53,21 +53,63 @@ RC_PARAMS = {
     "ytick.major.size": 3,
 }
 
+# One style per method key, shared by the main-figure panels, the SI survey
+# figures and the legend strip so they cannot drift apart. Hue families:
+# gray = sparse / QRAM, blue + green = oblivious sketches (hashing, sparse
+# JL), magenta + purple = adaptive sketches (AWM-Sketch, MISSION), orange =
+# quantum oracle sketching. Exact solutions use filled markers; streaming-SGD
+# algorithms (the adaptive sketches) use open markers.
 COLORS = {
     "quantum": "#CD591A",
     "streaming": "#2657AF",
     "sparse": "#606060",
     "jl_streaming": "#2A8C55",
+    "awm": "#C2338B",
+    "mission": "#7B3294",
 }
 LABELS = {
     "streaming": "Classical streaming",
     "sparse": "Classical sparse / QRAM",
     "quantum": "Quantum oracle sketching",
     "jl_streaming": "Classical sparse JL",
+    "awm": "AWM-Sketch",
+    "mission": "MISSION",
 }
-MARKERS = {"streaming": "P", "sparse": "X", "quantum": "D", "jl_streaming": "o"}
-MARKER_SIZES = {"streaming": 50, "sparse": 50, "quantum": 30, "jl_streaming": 42}
-MARKER_LINEWIDTHS = {"streaming": 0, "sparse": 0, "quantum": 0, "jl_streaming": 0}
+# Legend labels tag every entry as classical (C) or quantum (Q); the gray
+# curve stands for both classical sparse-matrix and QRAM-based quantum
+# algorithms, which share the same machine size.
+LEGEND_LABELS = {
+    "sparse": "(C) sparse / (Q) QRAM",
+    "streaming": "(C) feature hashing",
+    "jl_streaming": "(C) sparse JL",
+    "awm": "(C) AWM-Sketch",
+    "mission": "(C) MISSION",
+    "quantum": "(Q) oracle sketching",
+}
+MARKERS = {
+    "streaming": "P", "sparse": "X", "quantum": "D", "jl_streaming": "o",
+    "awm": "o", "mission": "^",
+}
+MARKER_SIZES = {
+    "streaming": 50, "sparse": 50, "quantum": 30, "jl_streaming": 42,
+    "awm": 42, "mission": 42,
+}
+MARKER_LINEWIDTHS = {
+    "streaming": 0, "sparse": 0, "quantum": 0, "jl_streaming": 0,
+    "awm": 1.2, "mission": 1.2,
+}
+FILLED = {
+    "streaming": True, "sparse": True, "quantum": True, "jl_streaming": False,
+    "awm": False, "mission": False,
+}
+LINESTYLES = {
+    "streaming": "-", "sparse": "-", "quantum": "-",
+    "jl_streaming": (0, (1, 1.15)), "awm": "-", "mission": "-",
+}
+ADAPTIVE_KEYS = ("awm", "mission")
+# Legend order = top-to-bottom order of the curves in the panels.
+MAIN_LEGEND_ORDER = ("sparse", "streaming", "jl_streaming", "awm", "mission", "quantum")
+QUANTUM_EMPHASIS_LINEWIDTH = 2.0  # QOS line weight when classical curves are dimmed
 
 
 def apply_plot_style():
@@ -339,8 +381,11 @@ def marker_indices(x_vals, num_markers, extra=()):
     return indices
 
 
-def plot_jl_overlay(ax, stats):
-    """Overlay the sparse-JL streaming curve on a combined-figure panel."""
+def plot_jl_overlay(ax, stats, alpha=1.0):
+    """Overlay the sparse-JL streaming curve on a combined-figure panel.
+
+    alpha scales every element's opacity (1.0 = the original appearance).
+    """
     xm, xs, ym = sort_by_space(
         stats["streaming"]["metric_mean"],
         stats["streaming"]["metric_sem"],
@@ -352,17 +397,17 @@ def plot_jl_overlay(ax, stats):
             xm - xs,
             xm + xs,
             color=COLORS["jl_streaming"],
-            alpha=0.10,
+            alpha=0.10 * alpha,
             edgecolor="none",
             zorder=1,
         )
     ax.plot(
         xm,
         ym,
-        linestyle=(0, (1, 1.15)),
+        linestyle=LINESTYLES["jl_streaming"],
         color=COLORS["jl_streaming"],
         linewidth=1.8,
-        alpha=0.95,
+        alpha=0.95 * alpha,
         dash_capstyle="round",
         zorder=4,
     )
@@ -373,10 +418,74 @@ def plot_jl_overlay(ax, stats):
         facecolors="none",
         edgecolors=COLORS["jl_streaming"],
         label=LABELS["jl_streaming"],
-        alpha=0.98,
+        alpha=0.98 * alpha,
         s=MARKER_SIZES["jl_streaming"],
         linewidth=1.2,
         zorder=5,
+    )
+
+
+def load_adaptive_curves(path, keys=ADAPTIVE_KEYS):
+    """Accuracy curves of the adaptive sketching methods from a
+    survey_adaptive_{dataset}.json: {key: (acc_mean, acc_sem, space_mean)},
+    each sorted by machine size, aggregated over all (task, seed) runs per
+    budget exactly like the survey figure's accuracy panels."""
+    import json
+
+    with open(path, "r") as f:
+        data = json.load(f)
+    raw = data["raw_data_by_budget"]
+    curves = {}
+    for key in keys:
+        means, sems, spaces = [], [], []
+        for budget in sorted(raw, key=int):
+            runs = raw[budget][key]["runs"]
+            mean, sem = sketch_utils.mean_and_sem(
+                np.array([r["accuracy"] for r in runs], dtype=float)
+            )
+            means.append(float(mean))
+            sems.append(float(sem))
+            spaces.append(float(np.mean([r["space"] for r in runs])))
+        curves[key] = sort_by_space(np.array(means), np.array(sems), np.array(spaces))
+    return curves
+
+
+def plot_adaptive_overlay(ax, curves, alpha=1.0):
+    """Overlay the adaptive sketching curves (solid line, open markers)."""
+    for key, (xm, xs, ym) in curves.items():
+        if np.any(xs > 0):
+            ax.fill_betweenx(
+                ym, xm - xs, xm + xs, color=COLORS[key], alpha=0.2 * alpha,
+                edgecolor="none", zorder=1,
+            )
+        ax.plot(
+            xm, ym, linestyle=LINESTYLES[key], color=COLORS[key], linewidth=1.5,
+            alpha=0.9 * alpha, zorder=4,
+        )
+        ax.scatter(
+            xm, ym, marker=MARKERS[key], facecolors="none", edgecolors=COLORS[key],
+            label=LABELS[key], alpha=0.98 * alpha, s=MARKER_SIZES[key],
+            linewidth=MARKER_LINEWIDTHS[key], zorder=5,
+        )
+
+
+def legend_handle(key, alpha=1.0, label=None):
+    """A line+marker legend proxy in the method's shared style."""
+    import matplotlib.lines as mlines
+
+    color = COLORS[key]
+    return mlines.Line2D(
+        [], [],
+        color=color,
+        linestyle=LINESTYLES[key],
+        linewidth=QUANTUM_EMPHASIS_LINEWIDTH if (key == "quantum" and alpha < 1.0) else 1.5,
+        marker=MARKERS[key],
+        markersize=7,
+        markerfacecolor=color if FILLED[key] else "none",
+        markeredgecolor=color,
+        markeredgewidth=0 if FILLED[key] else 1.2,
+        alpha=1.0 if key == "quantum" else alpha,
+        label=LEGEND_LABELS[key] if label is None else label,
     )
 
 
@@ -392,26 +501,38 @@ def plot_curve(
     num_markers=40,
     extra_marker_indices=(),
     fill_when_zero_err=True,
+    alpha=1.0,
+    emphasize=False,
 ):
     """Draw one method curve: SEM tube, line, and markers.
 
     key selects color/marker/label from the shared style; label overrides the
     default. When show_all_markers is False, markers are thinned via
     marker_indices. fill_when_zero_err=False suppresses the SEM tube when all
-    errors vanish.
+    errors vanish. alpha scales every element's opacity (1.0 = the original
+    appearance); emphasize draws the line heavier and on top (used for the
+    quantum curve when the classical curves are dimmed).
     """
     color = COLORS[key]
+    # Only the emphasized (quantum) curve gets explicit z-orders; the default
+    # path issues exactly the original calls (pixel-identical regression).
+    line_kw = {"zorder": 6} if emphasize else {}
+    marker_kw = {"zorder": 7} if emphasize else {}
     if fill_when_zero_err or np.any(x_err > 0):
         ax.fill_betweenx(
             y_mean,
             x_mean - x_err,
             x_mean + x_err,
             color=color,
-            alpha=0.2,
+            alpha=0.2 * alpha,
             edgecolor="none",
         )
 
-    ax.plot(x_mean, y_mean, linestyle="-", color=color, linewidth=1.5, alpha=0.9)
+    ax.plot(
+        x_mean, y_mean, linestyle="-", color=color,
+        linewidth=QUANTUM_EMPHASIS_LINEWIDTH if emphasize else 1.5,
+        alpha=0.9 * alpha, **line_kw,
+    )
 
     if show_all_markers:
         indices = np.arange(len(x_mean))
@@ -424,7 +545,8 @@ def plot_curve(
         marker=MARKERS[key],
         color=color,
         label=label if label is not None else LABELS[key],
-        alpha=0.9,
+        alpha=0.9 * alpha,
         s=MARKER_SIZES[key],
         linewidth=MARKER_LINEWIDTHS[key],
+        **marker_kw,
     )

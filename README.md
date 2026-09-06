@@ -212,13 +212,34 @@ Compute jobs checkpoint after every sketch dimension and resume from
 parallelizes its independent per-pair cross-validations over `--n-jobs`
 workers (default: all cores) without affecting the results.
 
+### Main-figure panels with the adaptive sketches and an external legend
+
+The combine scripts can overlay the adaptive sketching curves (AWM-Sketch,
+MISSION; classification panel only) from the adaptive survey JSON, suppress
+the floating in-panel labels in favour of a shared legend, and dim the
+classical curves so the quantum curve stands out:
+
+```bash
+python imdb_combine_fig.py --mode bucket_jl --adaptive --labels none --classical-alpha 0.6
+python make_legend_strip.py --classical-alpha 0.6 --out numerics_legend.pdf
+```
+
+(`--adaptive` writes `*_adaptive_combine.pdf`; the same flags work for the
+PBMC68k, 20 Newsgroups and Dorothea scripts.) `make_legend_strip.py` renders
+the single legend shared by the composite figures from the same style
+dictionary as the panels (`sweep_utils`), sized to span two panel figures;
+its entries are tagged (C) classical / (Q) quantum. Without the new flags the
+scripts reproduce their previous output pixel for pixel.
+
 ### Adaptive sketching survey
 
 `survey_adaptive.py` compares feature hashing — both the exact ridge
 terminal accuracy (dashed) and the same hashed model trained by the shared
 streaming SGD protocol (solid) — against two adaptive sketching methods
 trained by streaming ridge SGD — AWM-Sketch (SIGMOD 2018) and MISSION
-(ICML 2018) — on IMDb and PBMC68k classification, under a total
+(ICML 2018) — on IMDb, PBMC68k, 20 Newsgroups and Dorothea classification
+(`--dataset {imdb,pbmc68k,20news,dorothea}`; the pair datasets use all 100
+random pairs of their main-figure sweeps), under a total
 scalar-register budget that counts all adaptive state (sketch counters and
 heap/active-set ids and values). The stream
 draws single rows at random from an 80/20 train split (uniformly, or

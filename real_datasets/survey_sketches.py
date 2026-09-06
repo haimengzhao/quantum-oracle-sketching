@@ -354,7 +354,7 @@ STYLES = {
         marker="s",
         marker_size=36,
         filled=False,
-        label="Subsampling",
+        label="(C) subsampling",
     ),
     "bucket": dict(
         color=sweep_utils.COLORS["streaming"],
@@ -364,7 +364,7 @@ STYLES = {
         marker="P",
         marker_size=50,
         filled=True,
-        label="Feature hashing",
+        label=sweep_utils.LEGEND_LABELS["streaming"],
     ),
     "jl": dict(
         color="#2A8C55",
@@ -374,7 +374,7 @@ STYLES = {
         marker="o",
         marker_size=42,
         filled=False,
-        label="Sparse JL (s=1)",
+        label="(C) sparse JL (s=1)",
     ),
     "jl2": dict(
         color="#227044",
@@ -384,7 +384,7 @@ STYLES = {
         marker="o",
         marker_size=42,
         filled=False,
-        label="Sparse JL (s=2)",
+        label="(C) sparse JL (s=2)",
     ),
     "jl4": dict(
         color="#195433",
@@ -394,7 +394,7 @@ STYLES = {
         marker="o",
         marker_size=42,
         filled=False,
-        label="Sparse JL (s=4)",
+        label="(C) sparse JL (s=4)",
     ),
     "jl8": dict(
         color="#113822",
@@ -404,7 +404,7 @@ STYLES = {
         marker="o",
         marker_size=42,
         filled=False,
-        label="Sparse JL (s=8)",
+        label="(C) sparse JL (s=8)",
     ),
 }
 
@@ -441,9 +441,9 @@ YLIM = (1e1, 2e5)
 
 QOS_STYLE = dict(
     color=sweep_utils.COLORS["quantum"],
-    marker="D",
+    marker=sweep_utils.MARKERS["quantum"],
     marker_size=45,
-    label="Quantum oracle sketching",
+    label=sweep_utils.LEGEND_LABELS["quantum"],
 )
 # The full-matrix QOS reference is the quantum curve's full-dimension
 # endpoint of the corresponding main-figure sweep, read verbatim from its
@@ -670,13 +670,14 @@ def plot_survey(json_dir, output_pdf):
             label=QOS_STYLE["label"],
         )
     )
+    # Seven entries with (C)/(Q) tags exceed the figure width in one row.
     fig.legend(
         handles=handles,
         loc="lower center",
-        ncol=len(handles),
+        ncol=4,
         frameon=True,
     )
-    fig.tight_layout(rect=(0, 0.07, 1, 1))
+    fig.tight_layout(rect=(0, 0.11, 1, 1))
     fig.savefig(output_pdf)
     print(f"Saved {output_pdf}")
 
